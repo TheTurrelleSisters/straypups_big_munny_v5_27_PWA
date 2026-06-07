@@ -942,7 +942,10 @@ function doSpin(){
   if(S.bal<S.cpl){toast('INSERT CASH TO PLAY');return;}
   if(_reelWinH===0) initReelSlots();
   S.spinning=true;S.bal-=S.cpl;
-  if(typeof Progressive!=='undefined') Progressive.contribute(S.cpl);
+  var _forceJP=false;
+  if(typeof Progressive!=='undefined'){
+    _forceJP=Progressive.contribute(S.cpl);
+  }
   var _spinBalBefore=S.bal+S.cpl; var _spinCardSerial=BG.cardSerial;
   setWin(0,'');document.getElementById('bt-box').classList.remove('on');
   updUI();setCtrl(false);
@@ -952,6 +955,28 @@ function doSpin(){
   GS.hasSpun=true;GS.state='active';
 
   var winPatterns=doBingoSpin();
+
+  // ── FORCE JACKPOT CHECK ─────────────────────────────────────────────
+  // If operator armed a force jackpot, try to claim it atomically.
+  // If claim succeeds: inject Progressive Jackpot pattern into winPatterns.
+  // If claim fails (another device was faster): spin continues normally.
+  if(_forceJP && typeof Progressive!=='undefined'){
+    Progressive.claimForce(function(didWin, forceAmt){
+      if(!didWin) return; // someone else got it — spin normally
+      // Inject the progressive pattern (Hot Dog cells, ≤21 balls)
+      var _forcePat={
+        name:'Progressive Jackpot',balls:21,pay:[40,80,120],
+        reel:'1bw4',cells:[6,7,8,10,11,12,13,14,16,17,18],
+        isProgressive:true,_forceAmt:forceAmt
+      };
+      if(!winPatterns.length){
+        winPatterns=[_forcePat];
+      } else {
+        winPatterns.unshift(_forcePat);
+      }
+    });
+  }
+  // ── END FORCE JACKPOT CHECK ───────────────────────────────────────────
   // Active caller: start on first spin, keep running on subsequent spins
   if(!BG.entTimer) startActiveCaller();
   var spinData;
@@ -1099,7 +1124,10 @@ function updateProgMeter(value){
 function initProgressiveMeter(){
   if(typeof Progressive==='undefined') return;
   Progressive.onChange(updateProgMeter);
-  Progressive.init(function(){updateProgMeter(Progressive.getValue());});
+  Progressive.init(function(){
+    updateProgMeter(Progressive.getValue());
+    setTimeout(function(){ sizeLayout(); }, 50);
+  });
 }
 
 /* -- INIT -- */
@@ -1117,9 +1145,10 @@ document.getElementById('bingo-col-hdrs').style.display='none';
   ];
   renderReels([5,1,4],initGhosts);
 }());
-updUI();sizeLayout();
+updUI();
 initProgressiveMeter();
-startSilentCaller(); // game load — silent until first SPIN
+startSilentCaller();
+setTimeout(sizeLayout,100); // game load — silent until first SPIN
 startPatternShowcase();
 
 document.getElementById('spin-btn').addEventListener('click',doSpin);

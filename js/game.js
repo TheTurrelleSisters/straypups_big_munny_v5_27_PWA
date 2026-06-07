@@ -1050,6 +1050,58 @@ function renderHelp(){
 }
 
 /* â”€â”€ INIT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
+
+/* ── PROGRESSIVE JACKPOT OVERLAY ── */
+function showProgJP(progAmt,basePat,rsPatterns,winPatterns,cpl,baseAmt,cardSerial,balBefore){
+  var el=document.getElementById('jp-ov');
+  var big=document.getElementById('jp-big');
+  var sub=document.getElementById('jp-sub');
+  var amt=document.getElementById('jp-amt');
+  if(big) big.textContent='PROGRESSIVE JACKPOT!';
+  if(sub) sub.textContent='HOT DOG IN 21 BALLS!';
+  if(amt) amt.textContent=(typeof Progressive!=='undefined'?Progressive.getDisplay():'')+'  +  $'+baseAmt.toFixed(2)+' BASE';
+  sndJackpot();el.classList.add('on');
+  function onDismiss(){
+    el.classList.remove('on');el.onclick=null;el.ontouchend=null;
+    if(big) big.textContent='JACKPOT!';
+    if(sub) sub.textContent='CONGRATULATIONS!';
+    if(rsPatterns&&rsPatterns.length>0){
+      startPatternCycle([basePat]);
+      setTimeout(function(){
+        stopPatternCycle();
+        runRS(rsPatterns,cpl,function(bonusTotal){
+          setWin(baseAmt+bonusTotal+(S.lastWin-baseAmt),'PROGRESSIVE JACKPOT + RED SPIN!');
+          document.getElementById('bt-box').classList.remove('on');
+          startPatternCycle(winPatterns);
+          opLog({type:'SPIN',gameSerial:genGameSerial(),cardSerial:cardSerial,
+            bet:cpl,win:S.lastWin,patterns:winPatterns.map(function(p){return p.name;}),
+            balBefore:balBefore,balAfter:S.bal});
+          _spinDebounce=Date.now();updUI();S.spinning=false;setCtrl(true);
+        });
+      },600);
+    } else {
+      startPatternCycle(winPatterns);
+      opLog({type:'SPIN',gameSerial:genGameSerial(),cardSerial:cardSerial,
+        bet:cpl,win:S.lastWin,patterns:winPatterns.map(function(p){return p.name;}),
+        balBefore:balBefore,balAfter:S.bal});
+      _spinDebounce=Date.now();S.spinning=false;setCtrl(true);updUI();
+    }
+  }
+  el.onclick=onDismiss;
+  el.ontouchend=function(e){e.preventDefault();onDismiss();};
+}
+
+function updateProgMeter(value){
+  var el=document.getElementById('prog-meter-val');
+  if(el) el.textContent='$'+value.toFixed(2);
+}
+
+function initProgressiveMeter(){
+  if(typeof Progressive==='undefined') return;
+  Progressive.onChange(updateProgMeter);
+  Progressive.init(function(){updateProgMeter(Progressive.getValue());});
+}
+
 /* -- INIT -- */
 BG.callSeq=genBallCall();
 BG.ballPos=0;

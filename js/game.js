@@ -35,8 +35,10 @@ function sizeLayout(){
   hdrEl.style.height=hdrH+'px';
   hdrImg.style.width='100%'; hdrImg.style.height=hdrH+'px';
   hdrImg.style.objectFit='contain'; hdrImg.style.objectPosition='center center';
-  // Bingo section: 32% of remaining height
-  var remH=vph-hdrH;
+  // Bingo section: 32% of remaining height (subtract prog-meter if present)
+  var progMeterEl=document.getElementById('prog-meter');
+  var progMeterH=progMeterEl?progMeterEl.offsetHeight:0;
+  var remH=vph-hdrH-progMeterH;
   var bingoH=Math.round(remH*0.32);
   document.getElementById('bingo-section').style.height=bingoH+'px';
   sizeBingoElements(bingoH, vpw);
@@ -940,6 +942,7 @@ function doSpin(){
   if(S.bal<S.cpl){toast('INSERT CASH TO PLAY');return;}
   if(_reelWinH===0) initReelSlots();
   S.spinning=true;S.bal-=S.cpl;
+  if(typeof Progressive!=='undefined') Progressive.contribute(S.cpl);
   var _spinBalBefore=S.bal+S.cpl; var _spinCardSerial=BG.cardSerial;
   setWin(0,'');document.getElementById('bt-box').classList.remove('on');
   updUI();setCtrl(false);
@@ -985,6 +988,20 @@ function doSpin(){
     setWin(baseAmt,basePat.name.toUpperCase());
     updUI();
     if(baseAmt>=50) sndBigWin(); else sndSmallWin();
+
+    // ── PROGRESSIVE JACKPOT CHECK (Class II — bingo determined) ──────────
+    var _progPat=null;
+    for(var _pi=0;_pi<winPatterns.length;_pi++){
+      if(winPatterns[_pi].isProgressive){_progPat=winPatterns[_pi];break;}
+    }
+    if(_progPat&&typeof Progressive!=='undefined'){
+      var _progAmt=Progressive.hit({pattern:'Progressive Jackpot',balls:21,bet:S.cpl});
+      S.bal+=_progAmt;S.lastWin+=_progAmt;updUI();
+      showProgJP(_progAmt,basePat,rsPatterns,winPatterns,S.cpl,baseAmt,_spinCardSerial,_spinBalBefore);
+      return;
+    }
+    // ── END PROGRESSIVE CHECK ─────────────────────────────────────────────
+
     // Pattern cycle starts AFTER reels are visible — no RS path
 
     if(rsPatterns.length>0){
@@ -1049,6 +1066,7 @@ document.getElementById('bingo-col-hdrs').style.display='none';
   renderReels([5,1,4],initGhosts);
 }());
 updUI();sizeLayout();
+initProgressiveMeter();
 startSilentCaller(); // game load — silent until first SPIN
 startPatternShowcase();
 

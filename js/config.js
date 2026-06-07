@@ -147,5 +147,12 @@ var BINGO_PATTERNS = [
    cells:[0,5,10,15,20,21,22,23,24]},
 
   {name:'Open Diamond',     balls:38, pay:[2,4,6],         reel:'ch1',
-   cells:[2,10,12,14,22]}
+   cells:[2,10,12,14,22]},
+
+  // ── PROGRESSIVE JACKPOT ─────────────────────────────────────────────────
+  // Class II compliant: bingo-determined. Hot Dog cells completed in ≤21 balls.
+  // Awards base Hot Dog pay PLUS shared progressive pot. Stacks with standard Hot Dog.
+  {name:'Progressive Jackpot', balls:21, pay:[40,80,120], reel:'1bw4',
+   cells:[6,7,8,10,11,12,13,14,16,17,18], isProgressive:true}
+
 ];

@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -7,14 +7,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#08000f">
-<link rel="stylesheet" href="css/styles.css?v=5.27">
 <link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="assets/icons/icon-192x192.png">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Big Munny">
-<link rel="apple-touch-icon" href="icon-192.png">
-<link rel="apple-touch-startup-image" href="assets/splash.jpg">
+<meta name="apple-mobile-web-app-title" content="StrayPups $1">
+<link rel="stylesheet" href="css/styles.css?v=5.27">
 </head>
 <body>
 <div id="asset-store">
@@ -70,7 +67,11 @@
     </div>
   </div>
 
-  <div id="win-row">
+  <div id="prog-meter">
+    <div id="prog-meter-lbl">&#9733; PROGRESSIVE JACKPOT &#9733;</div>
+    <div id="prog-meter-val">$500.00</div>
+  </div>
+<div id="win-row">
     <div class="wbox"><div class="wlbl">WIN</div><div class="wval" id="wval">$0.00</div></div>
     <div id="bt-box"><div id="bt-lbl">BONUS TOTAL</div><div id="bt-val">$0.00</div></div>
   </div>
@@ -118,118 +119,20 @@
   <div id="help-body"></div>
 </div>
 
-<script src="js/config.js?v=5.27"></script>
-<script src="js/game.js?v=5.27"></script>
-<script src="js/operator.js?v=5.27"></script>
-
-<!-- PWA Install Banner -->
-<div id="pwa-banner" style="display:none;position:fixed;bottom:0;left:0;right:0;z-index:99999;
-  background:linear-gradient(135deg,#1a0035,#08000f);
-  border-top:2px solid #d4af37;
-  padding:14px 16px 20px;
-  box-shadow:0 -4px 20px rgba(212,175,55,.3);
-  font-family:Impact,sans-serif;
-  text-align:center;">
-  <div style="color:#f5d878;font-size:18px;letter-spacing:2px;margin-bottom:6px;">
-    📲 INSTALL THIS GAME ON YOUR PHONE
-  </div>
-  <div id="pwa-safari-msg" style="display:none;color:rgba(255,255,255,.7);font-size:11px;letter-spacing:1px;margin-bottom:10px;">
-    Tap <strong style="color:#f5d878">Share</strong> then <strong style="color:#f5d878">Add to Home Screen</strong>
-  </div>
-  <div style="display:flex;gap:8px;justify-content:center;">
-    <button id="pwa-install-btn" style="display:none;background:linear-gradient(135deg,#d4af37,#8b6914);
-      color:#08000f;border:none;border-radius:8px;padding:10px 24px;
-      font-family:Impact,sans-serif;font-size:14px;letter-spacing:2px;cursor:pointer;">
-      INSTALL NOW
-    </button>
-    <button id="pwa-dismiss-btn" style="background:rgba(255,255,255,.08);color:rgba(255,255,255,.5);
-      border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:10px 20px;
-      font-family:Impact,sans-serif;font-size:12px;letter-spacing:1px;cursor:pointer;">
-      NOT NOW
-    </button>
-  </div>
-</div>
-
 <script>
-/* ── PWA SERVICE WORKER + INSTALL PROMPT ── */
-if('serviceWorker' in navigator){
-  window.addEventListener('load', function(){
-    navigator.serviceWorker.register('./sw.js').catch(function(){});
-  });
-}
-
-var _pwaPrompt = null;
-var _pwaShown = false;
-
-// Capture native install prompt if available (Chrome/Android)
-window.addEventListener('beforeinstallprompt', function(e){
-  e.preventDefault();
-  _pwaPrompt = e;
-});
-
-function showPWABanner(){
-  if(_pwaShown) return;
-  if(window.matchMedia('(display-mode: standalone)').matches) return;
-  if(window.navigator.standalone === true) return;
-  _pwaShown = true;
-
-  var banner   = document.getElementById('pwa-banner');
-  var installBtn = document.getElementById('pwa-install-btn');
-  var safariMsg  = document.getElementById('pwa-safari-msg');
-  var dismissBtn = document.getElementById('pwa-dismiss-btn');
-
-  var isIOS    = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  var isSafari = /safari/i.test(navigator.userAgent) && !/chrome|crios|fxios/i.test(navigator.userAgent);
-
-  if(isIOS && isSafari){
-    // Safari iOS — show tap Share instructions + button that highlights share
-    safariMsg.style.display = 'block';
-    installBtn.style.display = 'inline-block';
-    installBtn.textContent = 'TAP SHARE → ADD TO HOME SCREEN';
-    installBtn.addEventListener('click', function(){
-      // Can't trigger Safari share programmatically — just highlight instruction
-      safariMsg.style.color = '#f5d878';
-      safariMsg.style.fontWeight = 'bold';
-    });
-  } else {
-    // Chrome, Samsung Browser, Edge, Firefox — always show INSTALL NOW button
-    installBtn.style.display = 'inline-block';
-    installBtn.textContent = 'INSTALL NOW';
-    installBtn.addEventListener('click', function(){
-      if(_pwaPrompt){
-        // Native prompt available — use it
-        _pwaPrompt.prompt();
-        _pwaPrompt.userChoice.then(function(result){
-          if(result.outcome === 'accepted') banner.style.display = 'none';
-        });
-      } else {
-        // No native prompt yet — guide user to browser menu
-        safariMsg.style.display = 'block';
-        safariMsg.innerHTML = 'Tap your browser’s <strong style="color:#f5d878">menu (⋮ or ☰)</strong> then tap <strong style="color:#f5d878">Add to Home Screen</strong>';
-        installBtn.textContent = 'SEE INSTRUCTIONS ABOVE';
-        installBtn.style.background = 'rgba(212,175,55,.2)';
-      }
+  var PROG_GAME_ID = 'straypups_1d';
+  var PROG_DENOM   = 1.00;
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function() {
+      navigator.serviceWorker.register('service-worker.js').catch(function(e) {
+        console.warn('SW reg failed:', e);
+      });
     });
   }
-
-  banner.style.display = 'block';
-  var autoHide = setTimeout(function(){ banner.style.display='none'; }, 15000);
-  dismissBtn.addEventListener('click', function(){
-    clearTimeout(autoHide);
-    banner.style.display='none';
-  });
-}
-
-(function(){
-  var check = setInterval(function(){
-    var sp = document.getElementById('splash');
-    if(sp && (sp.style.display==='none' || sp.classList.contains('fade'))){
-      clearInterval(check);
-      setTimeout(showPWABanner, 800);
-    }
-  }, 500);
-  setTimeout(function(){ clearInterval(check); showPWABanner(); }, 6000);
-}());
 </script>
+<script src="js/config.js?v=5.27"></script>
+<script src="js/game.js?v=5.27"></script>
+<script src="js/progressive.js?v=5.27"></script>
+<script src="js/operator.js?v=5.27"></script>
 </body>
 </html>

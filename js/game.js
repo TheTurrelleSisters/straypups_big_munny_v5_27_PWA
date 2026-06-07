@@ -988,7 +988,14 @@ function doSpin(){
   } else {
     // Sort ascending â€” LOWEST paying pattern is the base spin
     winPatterns.sort(function(a,b){return a.pay[0]-b.pay[0];});
-    spinData=forcedSpinResult(REEL_SYMS[winPatterns[0].reel]||REEL_SYMS['none']);
+    // If progressive jackpot fired, always show SP/SP/Single BAR on reels
+    var _progInWins=false;
+    for(var _rpi=0;_rpi<winPatterns.length;_rpi++){if(winPatterns[_rpi].isProgressive){_progInWins=true;break;}}
+    if(_progInWins){
+      spinData=forcedSpinResult(REEL_SYMS['1bw4']); // SP / SP / Single BAR
+    } else {
+      spinData=forcedSpinResult(REEL_SYMS[winPatterns[0].reel]||REEL_SYMS['none']);
+    }
   }
 
   animateReels(spinData,function(){

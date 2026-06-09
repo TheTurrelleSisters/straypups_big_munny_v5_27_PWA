@@ -686,6 +686,12 @@ var CURRENT_GHOSTS=[{above:6,sym:5,below:4},{above:6,sym:4,below:3},{above:3,sym
 var CPL=[1,2,3];
 
 function fmt(n){return '$'+n.toFixed(2);}
+function fmtMoney(n){
+  /* Format with thousands separator: $1,234.56 */
+  var parts=n.toFixed(2).split('.');
+  parts[0]=parts[0].replace(/\B(?=(\d{3})+(?!\d))/g,',');
+  return '$'+parts.join('.');
+}
 function updUI(){
   document.getElementById('bval').textContent=fmt(S.bal);
   _savePlayerState();
@@ -957,28 +963,14 @@ function doSpin(){
   var winPatterns=doBingoSpin();
 
   // ── FORCE JACKPOT CHECK ─────────────────────────────────────────────
-  // If operator armed a force jackpot, try to claim it atomically.
-  // If claim succeeds: inject Progressive Jackpot pattern into winPatterns.
-  // If claim fails (another device was faster): spin continues normally.
-  if(_forceJP && typeof Progressive!=='undefined'){
-    Progressive.claimForce(function(didWin, forceAmt){
-      if(!didWin) return; // someone else got it — spin normally
-      // Inject the progressive pattern (Hot Dog cells, ≤21 balls)
-      var _forcePat={
-        name:'Progressive Jackpot',balls:21,pay:[40,80,120],
-        reel:'1bw4',cells:[6,7,8,10,11,12,13,14,16,17,18],
-        isProgressive:true,_forceAmt:forceAmt
-      };
-      if(!winPatterns.length){
-        winPatterns=[_forcePat];
-      } else {
-        winPatterns.unshift(_forcePat);
-      }
-    });
-  }
-  // ── END FORCE JACKPOT CHECK ───────────────────────────────────────────
-  // Active caller: start on first spin, keep running on subsequent spins
-  if(!BG.entTimer) startActiveCaller();
+  // claimForce is ASYNC (DB round-trip to claim the armed command row).
+  // ALL spin logic — reel animation, pattern eval, payout — is wrapped in
+  // _continueSpinAfterClaim() so it always runs AFTER the claim resolves,
+  // ensuring winPatterns is correct before the reels start spinning.
+  // FIX v1.3: was fire-and-forget; reels animated before callback returned.
+  function _continueSpinAfterClaim(){
+    // Active caller: start on first spin, keep running on subsequent spins
+    if(!BG.entTimer) startActiveCaller();
   var spinData;
   if(winPatterns.length===0){
     // No bingo â€” realistic non-winning combo
@@ -1027,9 +1019,13 @@ function doSpin(){
       if(winPatterns[_pi].isProgressive){_progPat=winPatterns[_pi];break;}
     }
     if(_progPat&&typeof Progressive!=='undefined'){
-      var _progAmt=Progressive.hit({pattern:'Progressive Jackpot',balls:21,bet:S.cpl});
-      S.bal+=_progAmt;S.lastWin+=_progAmt;updUI();
-      showProgJP(_progAmt,basePat,rsPatterns,winPatterns,S.cpl,baseAmt,_spinCardSerial,_spinBalBefore);
+      // FIX v1.3: pass callback so game waits for DB reset confirmation before
+      // proceeding. Progressive.hit() calls onDone(hitAmt) only after the
+      // progressive_hit RPC has confirmed — prevents stale meter and game lockup.
+      Progressive.hit({pattern:'Progressive Jackpot',balls:21,bet:S.cpl},function(_progAmt){
+        S.bal+=_progAmt;S.lastWin+=_progAmt;updUI();
+        showProgJP(_progAmt,basePat,rsPatterns,winPatterns,S.cpl,baseAmt,_spinCardSerial,_spinBalBefore);
+      });
       return;
     }
     // ── END PROGRESSIVE CHECK ─────────────────────────────────────────────
@@ -1057,6 +1053,27 @@ function doSpin(){
     opLog({type:'SPIN',gameSerial:genGameSerial(),cardSerial:_spinCardSerial,bet:S.cpl,win:baseAmt,patterns:winPatterns.map(function(p){return p.name;}),balBefore:_spinBalBefore,balAfter:S.bal});
     _spinDebounce=Date.now();S.spinning=false;setCtrl(true);updUI();
   });
+  } // end _continueSpinAfterClaim
+
+  // Force jackpot armed: wait for async DB claim before animating reels.
+  // winPatterns must be finalized before _continueSpinAfterClaim() runs.
+  // Normal path: no force armed, proceed immediately.
+  if(_forceJP && typeof Progressive!=='undefined'){
+    Progressive.claimForce(function(didWin, forceAmt){
+      if(didWin){
+        var _forcePat={
+          name:'Progressive Jackpot',balls:21,pay:[40,80,120],
+          reel:'1bw4',cells:[6,7,8,10,11,12,13,14,16,17,18],
+          isProgressive:true,_forceAmt:forceAmt
+        };
+        if(!winPatterns.length){winPatterns=[_forcePat];}
+        else{winPatterns.unshift(_forcePat);}
+      }
+      _continueSpinAfterClaim();
+    });
+  } else {
+    _continueSpinAfterClaim();
+  }
 }
 
 /* â”€â”€ HELP â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -1099,7 +1116,7 @@ function showProgJP(progAmt, basePat, rsPatterns, winPatterns, cpl, baseAmt, car
   var amtEl = document.getElementById('fw-amt');
   var subEl = document.getElementById('fw-sub');
 
-  if (amtEl) amtEl.textContent = '$' + progAmt.toFixed(2);
+  if (amtEl) amtEl.textContent = fmtMoney(progAmt);
   if (subEl) subEl.textContent = 'PROGRESSIVE JACKPOT!';
   if (vid) {
     vid.src = CEL_VIDS[Math.floor(Math.random() * CEL_VIDS.length)];
@@ -1153,7 +1170,7 @@ function showProgJP(progAmt, basePat, rsPatterns, winPatterns, cpl, baseAmt, car
 
 function updateProgMeter(value){
   var el=document.getElementById('prog-meter-val');
-  if(el) el.textContent='$'+value.toFixed(2);
+  if(el) el.textContent=fmtMoney(value);
 }
 
 function initProgressiveMeter(){

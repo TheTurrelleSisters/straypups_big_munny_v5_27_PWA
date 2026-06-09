@@ -1,8 +1,16 @@
 /*
  * progressive.js — Virtual Progressive Controller
  * Stray-Pup LLC / The Turrelle Sisters LLC
- * v1.2 — Force jackpot, ATTITUDE CHECK, presence, clean rewrite
+ * v1.3 — FIX: async hit/claimForce handshake, no game lockup, meter resets correctly
  * ES5 only. No arrow functions. No const/let. No backticks.
+ *
+ * CHANGES FROM v1.2:
+ *   - hit() now accepts a callback — game.js must pass one so spin resolution
+ *     waits for DB confirmation before proceeding (fixes lockup + stale meter).
+ *   - _claimForceWin() calls progressive_hit RPC and inserts hit record BEFORE
+ *     calling onClaimed(true) — DB is confirmed reset before game proceeds.
+ *   - _forceCommandId nulled after a force win so stale claim is impossible.
+ *   - Safety timeout in _claimForceWin: if DB takes >8s, unlocks game gracefully.
  */
 
 var SUPABASE_URL      = 'https://gdmmoeggkqsvqnqyrubx.supabase.co';
@@ -30,11 +38,13 @@ var Progressive = (function () {
   var _sessionKey       = 'sess_' + Math.random().toString(36).substr(2, 9);
 
   /* ── Force jackpot state ── */
-  var _forceArmed       = false;   // operator has armed a force jackpot
-  var _forceCommandId   = null;    // ID of the armed command row
-  var _forceClaimed     = false;   // this session has claimed the force win
-  var _onForceWin       = null;    // callback: function(amt) — called on THIS device when it wins
-  var _onForceNotify    = null;    // callback: function(amt, winnerGame) — ATTITUDE CHECK on others
+  var _forceArmed       = false;
+  var _forceCommandId   = null;
+  var _forceClaimed     = false;
+  var _onForceWin       = null;
+  var _onForceNotify    = null;
+
+  var _justWon = false;
 
   /* ═══════════════════════════════════════════════════════════════
      SDK LOADER
@@ -97,7 +107,6 @@ var Progressive = (function () {
   /* ═══════════════════════════════════════════════════════════════
      REALTIME: VALUE + COMMANDS
      ═══════════════════════════════════════════════════════════════ */
-  /* Subscribe to hits — show ATTITUDE CHECK on non-winner devices */
   function _subscribeHits() {
     _client.channel('prog-hits-notify')
       .on('postgres_changes', {
@@ -106,7 +115,6 @@ var Progressive = (function () {
         table:  'progressive_hits'
       }, function (p) {
         if (!p.new) return;
-        /* Only show if WE didn't just win (check within 5s window) */
         if (_justWon) return;
         if (_onForceNotify) {
           _onForceNotify(
@@ -117,8 +125,6 @@ var Progressive = (function () {
       })
       .subscribe();
   }
-
-  var _justWon = false; /* Flag: set when THIS device wins, cleared after 5s */
 
   function _subscribeValue() {
     _client.channel('prog-value')
@@ -136,7 +142,6 @@ var Progressive = (function () {
 
   function _subscribeCommands() {
     _client.channel('prog-commands-' + _sessionKey.substr(0,4))
-      /* New command inserted — arm fires */
       .on('postgres_changes', { event:'INSERT', schema:'public', table:'progressive_commands' },
         function (p) {
           if (!p.new || p.new.command !== 'force_jackpot' || p.new.status !== 'armed') return;
@@ -145,18 +150,13 @@ var Progressive = (function () {
           _forceClaimed   = false;
           console.log('[Progressive] FORCE JACKPOT ARMED — fires on next spin!');
         })
-      /* Command updated — winner claimed */
       .on('postgres_changes', { event:'UPDATE', schema:'public', table:'progressive_commands' },
         function (p) {
           if (!p.new || p.new.command !== 'force_jackpot') return;
           if (p.new.status === 'won') {
-            /* Was it us? */
-            if (p.new.winner_session === _sessionKey) {
-              /* We already handled this in _claimForceWin */
-              return;
-            }
-            /* Someone else won — ATTITUDE CHECK */
-            _forceArmed   = false;
+            if (p.new.winner_session === _sessionKey) return; /* we handled it */
+            /* Someone else won — clear arm state + ATTITUDE CHECK */
+            _forceArmed     = false;
             _forceCommandId = null;
             if (_onForceNotify) {
               _onForceNotify(parseFloat(p.new.winner_amt) || 0, p.new.winner_game || 'another game');
@@ -214,15 +214,26 @@ var Progressive = (function () {
   }
 
   /* ═══════════════════════════════════════════════════════════════
-     FORCE WIN CLAIM — called by game engine when force is armed
-     and a spin is initiated on this device
+     FORCE WIN CLAIM
+     FIX v1.3: DB reset is awaited before onClaimed(true) fires.
+     _forceCommandId is nulled after win to prevent stale claims.
+     Safety timeout unlocks game if DB takes >8s.
      ═══════════════════════════════════════════════════════════════ */
   function _claimForceWin(onClaimed) {
     if (!_forceCommandId || _forceClaimed) { onClaimed(false); return; }
     _forceClaimed = true;
-    var hitAmt = parseFloat(_localValue.toFixed(2));
+    var hitAmt    = parseFloat(_localValue.toFixed(2));
 
-    /* Atomic claim: update only if still 'armed' */
+    /* Safety net: if DB hangs for 8s, unlock game gracefully */
+    var _safetyTimer = setTimeout(function () {
+      console.warn('[Progressive] claimForce DB timeout — unlocking game');
+      _forceClaimed   = false;
+      _forceArmed     = false;
+      _forceCommandId = null;
+      onClaimed(false);
+    }, 8000);
+
+    /* Step 1: Atomically claim the command row */
     _client.from('progressive_commands')
       .update({
         status:         'won',
@@ -232,26 +243,65 @@ var Progressive = (function () {
         won_at:         new Date().toISOString()
       })
       .eq('id', _forceCommandId)
-      .eq('status', 'armed')   /* Only succeeds if still armed — race condition safe */
+      .eq('status', 'armed')
       .select()
       .then(function (res) {
         if (res.error || !res.data || !res.data.length) {
-          /* Someone else got there first */
-          _forceClaimed = false;
+          /* Someone else got there first — unlock cleanly */
+          clearTimeout(_safetyTimer);
+          _forceClaimed   = false;
           onClaimed(false);
           return;
         }
-        /* We won! Reset the pot */
-        _justWon = true; setTimeout(function(){ _justWon=false; }, 5000);
-        _localValue = _seed;
-        _notifyValue();
-        _forceArmed = false;
-        _client.rpc('progressive_hit', { reset_to: _seed });
-        _client.from('progressive_hits').insert({
-          game_id: PROG_GAME_ID, denom: PROG_DENOM,
-          amount: hitAmt, pattern: 'Force Jackpot', balls: 0, bet: 0
-        });
-        onClaimed(true, hitAmt);
+
+        /* Step 2: Reset the pot in DB — WAIT for confirmation before proceeding */
+        _client.rpc('progressive_hit', { reset_to: _seed })
+          .then(function (rpcRes) {
+            if (rpcRes.error) {
+              console.warn('[Progressive] progressive_hit RPC error:', rpcRes.error.message);
+              /* RPC failed — still proceed but log it. Meter resets locally. */
+            }
+
+            /* Step 3: Insert hit record (fire and forget — non-blocking) */
+            _client.from('progressive_hits').insert({
+              game_id: PROG_GAME_ID,
+              denom:   PROG_DENOM,
+              amount:  hitAmt,
+              pattern: 'Force Jackpot',
+              balls:   0,
+              bet:     0
+            });
+
+            /* Step 4: Update local state */
+            clearTimeout(_safetyTimer);
+            _justWon        = true;
+            setTimeout(function () { _justWon = false; }, 5000);
+            _localValue     = _seed;
+            _notifyValue();
+            _forceArmed     = false;
+            _forceCommandId = null;  /* FIX: null this so stale claims are impossible */
+
+            /* Step 5: NOW tell the game it won */
+            onClaimed(true, hitAmt);
+          })
+          .catch(function (err) {
+            console.warn('[Progressive] RPC catch:', err);
+            clearTimeout(_safetyTimer);
+            /* Reset locally even if RPC threw */
+            _justWon        = true;
+            setTimeout(function () { _justWon = false; }, 5000);
+            _localValue     = _seed;
+            _notifyValue();
+            _forceArmed     = false;
+            _forceCommandId = null;
+            onClaimed(true, hitAmt); /* game still gets its win */
+          });
+      })
+      .catch(function (err) {
+        console.warn('[Progressive] claimForce catch:', err);
+        clearTimeout(_safetyTimer);
+        _forceClaimed   = false;
+        onClaimed(false);
       });
   }
 
@@ -272,8 +322,7 @@ var Progressive = (function () {
           _checkArmedCommand();
           _subscribeMessages();
           _checkUnreadMessages();
-          /* Re-fetch config every 60s to pick up operator ceiling/seed changes */
-          setInterval(function() { _fetchRow(null); }, 60000);
+          setInterval(function () { _fetchRow(null); }, 60000);
           if (onReady) onReady();
         });
       } catch (e) {
@@ -283,61 +332,83 @@ var Progressive = (function () {
     });
   }
 
-  /*
-   * contribute(betAmt)
-   * Call on every spin start.
-   * If a force jackpot is armed, returns true — game must trigger the jackpot win.
-   * Game calls claimForce(callback) to atomically claim it.
-   */
   function contribute(betAmt) {
     if (!betAmt || betAmt <= 0) return false;
     var addition = betAmt * _contribRate;
-    /* Allow pot to grow freely — ceiling is a must-hit-by MAX, not a hard stop.
-       Jackpot triggers via bingo pattern (Class II) at any time regardless of pot size. */
     _localValue  = _localValue + addition;
-    /* Visual cap at ceiling for display — pot shows ceiling value when exceeded */
     if (_localValue > _ceiling) _localValue = _ceiling;
     _notifyValue();
     if (_connected && _client) {
       _pendingAdd += addition;
       _scheduleFlush();
     }
-    return _forceArmed; /* true = this spin should be a force jackpot */
+    return _forceArmed;
   }
 
-  /*
-   * claimForce(onResult)
-   * Called by game engine when contribute() returns true.
-   * onResult(didWin, amount) — if didWin=true, trigger jackpot.
-   * If didWin=false, someone else got there first — spin normally.
-   */
   function claimForce(onResult) {
     _claimForceWin(onResult);
   }
 
   /*
-   * hit(info) — natural jackpot (bingo pattern / 5OAK)
+   * hit(info, onDone)  — natural progressive jackpot (bingo pattern)
+   *
+   * FIX v1.3: now accepts an optional onDone callback.
+   * game.js MUST pass a callback — the game unlock sequence runs inside it,
+   * ensuring the DB reset is confirmed before the spin resolves.
+   *
+   * Backward compatible: if no callback passed, behaves like v1.2 (sync return).
    */
-  function hit(info) {
+  function hit(info, onDone) {
     var hitAmt  = parseFloat(_localValue.toFixed(2));
     _localValue = _seed;
     _notifyValue();
-    /* Suppress ATTITUDE CHECK on this device for 5 seconds */
     _justWon = true;
-    setTimeout(function() { _justWon = false; }, 5000);
-    if (_connected && _client) {
-      var rec = {
-        game_id: PROG_GAME_ID, denom: PROG_DENOM, amount: hitAmt,
-        pattern: (info && info.pattern) ? info.pattern : 'Progressive Jackpot',
-        balls:   (info && info.balls)   ? info.balls   : 0,
-        bet:     (info && info.bet)     ? info.bet      : 0
-      };
-      _client.rpc('progressive_hit', { reset_to: _seed });
-      _client.from('progressive_hits').insert(rec);
-      /* Re-fetch config after hit to ensure ceiling/seed are fresh */
-      setTimeout(function() { _fetchRow(null); }, 1000);
+    setTimeout(function () { _justWon = false; }, 5000);
+
+    if (!_connected || !_client) {
+      /* Offline — return immediately, no DB work possible */
+      if (onDone) onDone(hitAmt);
+      return hitAmt;
     }
-    return hitAmt;
+
+    var rec = {
+      game_id: PROG_GAME_ID,
+      denom:   PROG_DENOM,
+      amount:  hitAmt,
+      pattern: (info && info.pattern) ? info.pattern : 'Progressive Jackpot',
+      balls:   (info && info.balls)   ? info.balls   : 0,
+      bet:     (info && info.bet)     ? info.bet      : 0
+    };
+
+    /* Safety net: if DB takes >8s, unlock game anyway */
+    var _hitSafety = onDone ? setTimeout(function () {
+      console.warn('[Progressive] hit() DB timeout — unlocking game');
+      onDone(hitAmt);
+      onDone = null; /* prevent double-call */
+    }, 8000) : null;
+
+    /* Wait for RPC reset confirmation before calling onDone */
+    _client.rpc('progressive_hit', { reset_to: _seed })
+      .then(function (rpcRes) {
+        if (rpcRes.error) {
+          console.warn('[Progressive] progressive_hit RPC error:', rpcRes.error.message);
+        }
+        /* Insert hit record — fire and forget */
+        _client.from('progressive_hits').insert(rec);
+        /* Re-fetch to ensure meter is fresh */
+        setTimeout(function () { _fetchRow(null); }, 1000);
+        /* Unlock game */
+        if (_hitSafety) clearTimeout(_hitSafety);
+        if (onDone) { onDone(hitAmt); onDone = null; }
+      })
+      .catch(function (err) {
+        console.warn('[Progressive] hit RPC catch:', err);
+        _client.from('progressive_hits').insert(rec);
+        if (_hitSafety) clearTimeout(_hitSafety);
+        if (onDone) { onDone(hitAmt); onDone = null; }
+      });
+
+    return hitAmt; /* still returns sync for any legacy callers */
   }
 
   function mustHit()              { return _localValue >= _ceiling; }
@@ -348,12 +419,9 @@ var Progressive = (function () {
   function isForceArmed()         { return _forceArmed; }
   function getSessionKey()        { return _sessionKey; }
 
-
-  /* ═══════════════════════════════════════════════════════════════════
+  /* ═══════════════════════════════════════════════════════════════
      BROADCAST MESSAGES
-     Live players get notified instantly via Realtime.
-     Offline players see unread messages on next game load.
-     ═══════════════════════════════════════════════════════════════════ */
+     ═══════════════════════════════════════════════════════════════ */
   var _messageListeners  = [];
   var _lastSeenMessageId = 0;
   var _SEEN_KEY          = 'prog_last_msg_' + PROG_GAME_ID;
@@ -377,7 +445,6 @@ var Progressive = (function () {
     _saveLastSeen(msg.id);
   }
 
-  /* Subscribe to new messages in realtime */
   function _subscribeMessages() {
     _client.channel('broadcast-messages')
       .on('postgres_changes', {
@@ -391,7 +458,6 @@ var Progressive = (function () {
       .subscribe();
   }
 
-  /* On load: fetch any messages player hasn't seen yet */
   function _checkUnreadMessages() {
     _loadLastSeen();
     _client.from('broadcast_messages')
@@ -400,20 +466,15 @@ var Progressive = (function () {
       .order('id', { ascending: true })
       .then(function(res) {
         if (res.error || !res.data || !res.data.length) return;
-        /* Show messages with a small delay between each */
         res.data.forEach(function(msg, i) {
           setTimeout(function() { _notifyMessage(msg); }, i * 4000);
         });
       });
   }
 
-  /* PUBLIC: register callback for incoming messages */
-  function onMessage(fn) { _messageListeners.push(fn); }
-
+  function onMessage(fn)          { _messageListeners.push(fn); }
   function onChange(fn)           { _valueListeners.push(fn); fn(_localValue); }
   function onPresenceChange(fn)   { _presenceListeners.push(fn); fn(_presenceCount); }
-
-  /* Register callbacks for force win events */
   function onForceWin(fn)         { _onForceWin    = fn; }
   function onForceNotify(fn)      { _onForceNotify = fn; }
 

@@ -266,6 +266,19 @@ function genBallCall(){
   return rng.shuffle(balls);
 }
 
+/* updateBallCallBadge — shows LIVE BALLS or LOCAL in the UI */
+function updateBallCallBadge(){
+  var el=document.getElementById('ball-call-badge');
+  if(!el) return;
+  if(BG.usingServerBalls){
+    el.textContent='\u25cf LIVE BALLS';
+    el.style.color='#00ff88';
+  } else {
+    el.textContent='\u25cf LOCAL';
+    el.style.color='#ffaa00';
+  }
+}
+
 /* fetchServerBallCall — get sequence from DB with local fallback
    cb(sequence) always fires — never stalls the game.
    Online:  fetches server sequence, stores in BG.callSeq, sets BG.usingServerBalls=true
@@ -557,6 +570,74 @@ function _handleCoverAll(hasPenny){
 function startEntertainmentBalls(){startActiveCaller();}
 function stopEntertainmentBalls(){stopActiveCaller();}
 
+
+/* generateCoverAllSpin — called when force jackpot fires.
+   Generates a bingo card and a ball call where the first 25 balls
+   dub every cell on the card. Sets BG state so doBingoSpin sees
+   a guaranteed Cover All and awards all qualifying patterns. */
+function generateCoverAllSpin(){
+  // Generate a fresh card
+  BG.card=genBingoCard();
+  BG.cardNumSet={};
+  for(var i=0;i<25;i++){if(BG.card[i]!==null) BG.cardNumSet[BG.card[i]]=i;}
+
+  // Build the first 25 balls of the call to cover all 24 non-free cells
+  // Collect all numbers on the card (excluding null free space)
+  var cardNums=[];
+  for(var ci=0;ci<25;ci++){if(BG.card[ci]!==null) cardNums.push(BG.card[ci]);}
+  // Shuffle them so the cover-all happens in random order (fair + varied)
+  rng.shuffle(cardNums); // cardNums is now 24 balls that cover the card
+
+  // Fill remaining 51 balls with non-card numbers in random order
+  var allBalls=[];
+  for(var b=1;b<=75;b++) allBalls.push(b);
+  var cardSet={};
+  for(var k=0;k<cardNums.length;k++) cardSet[cardNums[k]]=true;
+  var remaining=[];
+  for(var r=0;r<allBalls.length;r++){if(!cardSet[allBalls[r]]) remaining.push(allBalls[r]);}
+  rng.shuffle(remaining);
+
+  // Full 75-ball sequence: first 24 cover the card, ball 25 is a filler
+  // (free space is cell 12, auto-daubed — only 24 balls needed to cover all)
+  // Add one filler as ball 25 so sequence length makes sense visually
+  BG.callSeq=cardNums.concat([remaining[0]]).concat(remaining.slice(1));
+  BG.ballPos=25; // show 25 balls called
+  BG.usingServerBalls=false; // generated locally for this guaranteed win
+  updateBallCallBadge();
+
+  // Daub all 25 cells
+  BG.matchedCells={12:true};
+  for(var d=0;d<cardNums.length;d++){
+    var cellId=BG.cardNumSet[cardNums[d]];
+    if(cellId!==undefined) BG.matchedCells[cellId]=true;
+  }
+
+  // Evaluate ALL patterns within 25 balls
+  var wonPats={};
+  var winPatterns=[];
+  for(var pb=0;pb<25;pb++){
+    var pball=BG.callSeq[pb];
+    var ballsCalledSoFar=pb+1;
+    for(var pi=0;pi<BINGO_PATTERNS.length;pi++){
+      if(wonPats[pi]) continue;
+      var pat=BINGO_PATTERNS[pi];
+      if(ballsCalledSoFar>pat.balls) continue;
+      var complete=true;
+      for(var pc=0;pc<pat.cells.length;pc++){
+        var c=pat.cells[pc];
+        if(c===12) continue;
+        if(!BG.matchedCells[c]){complete=false;break;}
+      }
+      if(complete){wonPats[pi]=true;winPatterns.push(pat);}
+    }
+  }
+
+  BG.winPatterns=winPatterns;
+  BG._coverAll1to40=false; // handled by force jackpot path, not penny handler
+  renderBingoCard(BG.card,BG.matchedCells,null);
+  renderBallStrip(BG.callSeq,BG.ballPos,BG.cardNumSet);
+  return winPatterns;
+}
 
 function doBingoSpin(){
   stopPatternCycle();
@@ -1097,16 +1178,19 @@ function doSpin(){
     });
   } // end _continueSpinAfterClaim
 
-  // Force jackpot: claim async, THEN run spin — both paths always call _continueSpinAfterClaim
+  // Force jackpot: claim async, THEN generate guaranteed Cover All + run spin
   if(_forceJP&&typeof Progressive!=='undefined'){
     Progressive.claimForce(function(didWin,forceAmt){
       if(didWin){
+        // Override the random card with a guaranteed Cover All card + matching ball call
+        var coverAllPatterns=generateCoverAllSpin();
         var _forcePat={
           name:'Progressive Jackpot',balls:25,pay:[40,80,120],
           reel:'coverall',cells:[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24],
           isProgressive:true,_forceAmt:forceAmt
         };
-        winPatterns=winPatterns.length?[_forcePat].concat(winPatterns):[_forcePat];
+        // winPatterns = force pattern + all Cover All qualifying patterns
+        winPatterns=[_forcePat].concat(coverAllPatterns.filter(function(p){return !p.isProgressive;}));
       }
       _continueSpinAfterClaim(); // ALWAYS called — no lockup possible
     });
@@ -1155,7 +1239,7 @@ function showProgJP(progAmt, basePat, rsPatterns, winPatterns, cpl, baseAmt, car
   var amtEl = document.getElementById('fw-amt');
   var subEl = document.getElementById('fw-sub');
 
-  if (amtEl) amtEl.textContent = '$' + progAmt.toFixed(2);
+  if (amtEl) amtEl.textContent = fmtMoney(progAmt);
   if (subEl) subEl.textContent = 'PROGRESSIVE JACKPOT!';
   if (vid) {
     vid.src = CEL_VIDS[Math.floor(Math.random() * CEL_VIDS.length)];
@@ -1218,7 +1302,7 @@ function showProgJP(progAmt, basePat, rsPatterns, winPatterns, cpl, baseAmt, car
 
 function updateProgMeter(value){
   var el=document.getElementById('prog-meter-val');
-  if(el) el.textContent='$'+value.toFixed(2);
+  if(el) el.textContent=fmtMoney(value);
 }
 
 /* ── BROADCAST TOAST v1.3 ─────────────────────────────────────────────────────

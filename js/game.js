@@ -567,6 +567,10 @@ function stopActiveCaller(){
 }
 function _activeCallNext(){
   BG.ballPos=(BG.ballPos||0)+1;
+  /* Update DB ball position so joining players start at correct ball */
+  if(typeof Progressive!=='undefined' && Progressive.updateBallPos) {
+    Progressive.updateBallPos(BG.ballPos);
+  }
   if(BG.ballPos>=75){
     // All 75 called — fetch new server sequence (or local fallback)
     // New 40 balls populate strip instantly, no blank state
@@ -867,6 +871,12 @@ var CURRENT_GHOSTS=[{above:6,sym:5,below:4},{above:6,sym:4,below:3},{above:3,sym
 var CPL=[1,2,3];
 
 function fmt(n){return '$'+n.toFixed(2);}
+function fmtMoney(n){
+  var v=parseFloat(n);if(isNaN(v))return '$0.00';
+  var p=v.toFixed(2).split('.');
+  p[0]=p[0].replace(/\B(?=(\d{3})+(?!\d))/g,',');
+  return '$'+p.join('.');
+}
 function updUI(){
   document.getElementById('bval').textContent=fmt(S.bal);
   _savePlayerState();

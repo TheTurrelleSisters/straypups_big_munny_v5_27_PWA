@@ -442,6 +442,79 @@ var Progressive = (function () {
   /* PUBLIC: register callback for incoming messages */
   function onMessage(fn) { _messageListeners.push(fn); }
 
+
+  /* ═══════════════════════════════════════════════════════════════
+     BALL CALL — server-authoritative sequence shared across devices
+     Schema: ball_call(game_id, sequence jsonb, ball_pos int, issued_at)
+     ═══════════════════════════════════════════════════════════════ */
+
+  /*
+   * getBallCall(cb)
+   * Fetches the current server ball call sequence for PROG_GAME_ID.
+   * cb(sequence, isServer) — always fires.
+   * If no row exists yet, generates one locally.
+   */
+  function getBallCall(cb) {
+    if (!_client) {
+      cb(_genLocalSeq(), false);
+      return;
+    }
+    _client.from('ball_call')
+      .select('sequence, ball_pos')
+      .eq('game_id', PROG_GAME_ID)
+      .single()
+      .then(function(res) {
+        if (res.error || !res.data || !res.data.sequence || !res.data.sequence.length) {
+          /* No server sequence — fall back to local */
+          cb(_genLocalSeq(), false);
+          return;
+        }
+        cb(res.data.sequence, true);
+      })
+      .catch(function() { cb(_genLocalSeq(), false); });
+  }
+
+  /*
+   * refreshBallCall(cb)
+   * Upserts a fresh 75-ball sequence to the server so all clients sync.
+   * cb(sequence, isServer) — always fires.
+   */
+  function refreshBallCall(cb) {
+    if (!_client) {
+      cb(_genLocalSeq(), false);
+      return;
+    }
+    var newSeq = _genLocalSeq();
+    _client.from('ball_call')
+      .upsert({
+        game_id:   PROG_GAME_ID,
+        sequence:  newSeq,
+        ball_pos:  0,
+        issued_at: new Date().toISOString(),
+        issued_by: 'game'
+      }, { onConflict: 'game_id' })
+      .then(function(res) {
+        if (res.error) {
+          console.warn('[Progressive] refreshBallCall upsert error:', res.error.message);
+          cb(newSeq, false);
+          return;
+        }
+        cb(newSeq, true);
+      })
+      .catch(function() { cb(newSeq, false); });
+  }
+
+  /* Generate a locally-shuffled 1-75 sequence (Fisher-Yates) */
+  function _genLocalSeq() {
+    var arr = [];
+    for (var i = 1; i <= 75; i++) arr.push(i);
+    for (var j = arr.length - 1; j > 0; j--) {
+      var k = Math.floor(Math.random() * (j + 1));
+      var tmp = arr[j]; arr[j] = arr[k]; arr[k] = tmp;
+    }
+    return arr;
+  }
+
   function onChange(fn)           { _valueListeners.push(fn); fn(_localValue); }
   function onPresenceChange(fn)   { _presenceListeners.push(fn); fn(_presenceCount); }
 
@@ -467,6 +540,8 @@ var Progressive = (function () {
     onForceWin:       onForceWin,
     onForceNotify:    onForceNotify,
     retrack:          retrack,
-    registerPlayer:   registerPlayer
+    registerPlayer:   registerPlayer,
+    getBallCall:      getBallCall,
+    refreshBallCall:  refreshBallCall
   };
 }());

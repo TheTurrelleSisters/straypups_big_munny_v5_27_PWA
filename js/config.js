@@ -92,23 +92,23 @@ var BINGO_PATTERNS = [
   {name:'Cross Corners',    balls:29, pay:[320,640,960],   reel:'7w4',
    cells:[0,4,7,11,12,13,17,20,24]},
 
-  {name:'Pyramid',          balls:29, pay:[160,320,480],   reel:'7w2',
+  {name:'Pyramid',          balls:30, pay:[160,320,480],   reel:'7w2',
    cells:[12,16,17,18,20,21,22,23,24]},
 
   {name:'The Kite',         balls:35, pay:[160,320,480],   reel:'3bw4',
    cells:[0,1,2,5,6,7,10,11,12,18,24]},
 
-  {name:'Double Cross',     balls:28, pay:[80,160,240],    reel:'7',
+  {name:'Double Cross',     balls:30, pay:[80,160,240],    reel:'7',
    cells:[2,6,7,8,12,16,17,18,22]},
 
-  {name:'Arrowhead',        balls:30, pay:[80,160,240],    reel:'3bw2',
+  {name:'Arrowhead',        balls:35, pay:[80,160,240],    reel:'3bw2',
    cells:[2,6,7,8,10,12,14,17,22]},
 
 
   {name:'G Flat',           balls:36, pay:[40,80,120],     reel:'3b',
    cells:[2,3,4,7,12,15,16,17,20,21,22]},
 
-  {name:'Make Cents',       balls:29, pay:[40,80,120],     reel:'spchch',
+  {name:'Make Cents',       balls:32, pay:[40,80,120],     reel:'spchch',
    cells:[2,6,7,8,11,12,16,17,18,22]},
 
   {name:'Four Leaf Clover', balls:34, pay:[100,200,300],   reel:'2bw4',
@@ -130,13 +130,13 @@ var BINGO_PATTERNS = [
   {name:'Private Stripes',  balls:30, pay:[12,24,38],      reel:'1b',
    cells:[2,6,8,10,14]},
 
-  {name:'Stepladder',       balls:36, pay:[10,20,30],      reel:'spmb',
+  {name:'Stepladder',       balls:38, pay:[10,20,30],      reel:'spmb',
    cells:[4,7,8,12,15,16,20]},
 
   {name:'Hopscotch',        balls:38, pay:[10,20,30],      reel:'spch',
    cells:[1,3,7,11,13,17,21,23]},
 
-  {name:'Baby Buggy',       balls:35, pay:[10,20,30],      reel:'ch3',
+  {name:'Baby Buggy',       balls:36, pay:[10,20,30],      reel:'ch3',
    cells:[3,4,8,10,11,12,13,15,16,17,18,21,23]},
 
   // ── LOW PAYS ─────────────────────────────────────────────────────────────

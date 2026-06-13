@@ -1052,6 +1052,21 @@ function _refreshSpinWatchdog(){
   },15000);
 }
 
+/* Clear the spin watchdog WITHOUT rescheduling it. Used before showing a
+   player-dismissed celebration overlay (showJP/showProgJP) — waiting for
+   a tap is normal and can legitimately take longer than 15s; it is NOT
+   "stuck". Previously _refreshSpinWatchdog() was called here, which still
+   fired 15s later if the player simply hadn't tapped yet, force-unlocking
+   all controls (setCtrl(true)) while the celebration overlay was still
+   visible/blocking — the game appeared "locked up" (frozen celebration
+   over an unlocked board). The watchdog is re-armed via
+   _refreshSpinWatchdog() at the START of the dismiss handler, to still
+   catch a genuine hang during POST-celebration cleanup (full-card daub,
+   opLog, new WABC sequence request, etc). */
+function _clearSpinWatchdog(){
+  if(_spinWatchdog){ clearTimeout(_spinWatchdog); _spinWatchdog=null; }
+}
+
 function setCtrl(en){
   var ids=['spin-btn','cred-btn','max-btn','co-btn','ic-btn','help-btn'];
   for(var i=0;i<ids.length;i++) document.getElementById(ids[i]).disabled=!en;
@@ -1293,7 +1308,7 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
         var _totalAmt=progCtx.pennyAmt+bonusTotal+progCtx.amt;
         S.bal+=progCtx.amt;S.lastWin=_totalAmt;updUI();
         setTimeout(function(){
-          _refreshSpinWatchdog();
+          _clearSpinWatchdog();
           showProgJP(_totalAmt,progCtx.winPatterns,progCtx.cardSerial,progCtx.balBefore);
         },500);
         return;
@@ -1313,8 +1328,9 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
         redOv.classList.remove('on');badge.classList.remove('on');
         sndRedSpinEnd();
         setTimeout(function(){
-          _refreshSpinWatchdog();
+          _clearSpinWatchdog();
           showJP(payAmt,function(){
+          _refreshSpinWatchdog();
           bonusTotal+=payAmt;S.bal+=payAmt;updUI();
           setTimeout(function(){playNext();},300);
         });},500);return;
@@ -1654,6 +1670,10 @@ function showProgJP(progAmt, winPatterns, cardSerial, balBefore) {
   var dismissBtn = document.getElementById('fw-dismiss');
   function onDismiss() {
     if (!_dismissReady) return; /* ignore residual tap from prior overlay */
+    /* Re-arm the watchdog now that we're in the cleanup phase
+       (full-card daub, opLog, new WABC sequence request) — this CAN
+       hang on a DB issue, unlike waiting for the player's tap. */
+    _refreshSpinWatchdog();
     if (cel) cel.classList.remove('show');
     if (dismissBtn) dismissBtn.removeEventListener('click', onDismiss);
 

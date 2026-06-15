@@ -988,3 +988,21 @@ Cache bust: spbm-v588. Splash/title version updated to v5.88.
     Going forward: bump the ?v= number in the register() call with every release.
 
     Cache bust: spbm-v591. Splash/title version updated to v5.91.
+
+14. **Snap fix only — v5.88 spin behaviour restored (v5.92)** — Reverted all spin
+    direction/restructuring changes from v5.89-v5.91 which broke the 2-3 rotation
+    spin. Returned to exact v5.88 spinReel logic (top=0 → targetY, overshoot, phase
+    timing) with one targeted change only:
+
+    BEFORE (v5.88): Phase 2 held at overshootY, Phase 3 instantly snapped to targetY.
+    AFTER  (v5.92): Phase 2 cubic ease-out from overshootY → targetY. No Phase 3.
+    t2 is now stopDelay (was stopDelay*0.90) so the full remaining 25% is used to
+    ease smoothly into the final position. No freeze, no snap, no jump.
+
+    Also fixed: rest-layout rebuild sets strip.style.height and strip.style.top
+    BEFORE clearing innerHTML, so the DOM swap is invisible (no position snap).
+
+    Everything else identical to v5.88: strip order, STOP_DELAYS, RS_STOP, blur
+    removed in v5.89 kept removed, SW registration ?v= cache bust kept from v5.91.
+
+    Cache bust: spbm-v592. Splash/title version updated to v5.92.

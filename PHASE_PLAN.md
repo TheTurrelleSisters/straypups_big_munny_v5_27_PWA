@@ -1006,3 +1006,11 @@ Cache bust: spbm-v588. Splash/title version updated to v5.88.
     removed in v5.89 kept removed, SW registration ?v= cache bust kept from v5.91.
 
     Cache bust: spbm-v592. Splash/title version updated to v5.92.
+
+15. **Remove overshoot entirely (v5.93)** — v5.92 still had overshootY in phase 1
+    causing visible overshoot before easing back. Removed overshootExtra/overshootY
+    completely. Phase 1 now travels at constant velocity straight toward targetY.
+    Phase 2 cubic ease-out from coastEndY (75% of targetY) to exact targetY.
+    Pure smooth deceleration, no overshoot, no snap.
+
+    Cache bust: spbm-v593. Splash/title version updated to v5.93.

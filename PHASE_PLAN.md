@@ -952,3 +952,39 @@ Cache bust: spbm-v588. Splash/title version updated to v5.88.
 
     Cache bust: spbm-v589. Splash/title version updated to v5.89.
 
+
+12. **Reel direction fix + snap elimination (v5.90)** — Two bugs fixed in spinReel:
+
+    BUG 1 — Wrong spin direction (reels spun upward):
+    v5.89 set strip.top=0 and animated toward targetY (negative) — strip moved UP.
+    Fix: strip now starts at startY = targetY - (36 * slotH), which is far above
+    the viewport. Animation travels startY → targetY (less negative = strip moves DOWN).
+    Symbols now visibly fall downward, matching real slot machine behaviour.
+
+    BUG 2 — Snap at rest-layout rebuild:
+    After stop, innerHTML was cleared and rebuilt with stripTopFor() which uses
+    variable slot heights (blanks are tiny via blkSlotH). This gave a different
+    strip.top than targetY → visible position jump. Fix: set strip.style.top to
+    stripTopFor() value BEFORE clearing innerHTML (not after), so the DOM swap
+    is invisible. Height is also set before the clear for the same reason.
+
+    No other logic changed. All game functions, blank symbols, finalGhost,
+    STOP_DELAYS, RS_STOP, S.spinning flag all preserved.
+
+    Cache bust: spbm-v590. Splash/title version updated to v5.90.
+
+13. **Force SW update to all players (v5.91)** — Previous cache busts only changed
+    the CACHE name inside service-worker.js, but the SW file itself was registered
+    without a version string: `register('service-worker.js')`. If the server's HTTP
+    cache headers gave the SW file any max-age, browsers would keep running the old
+    SW indefinitely and never pick up changes.
+
+    Fix: SW registration now includes a version query string:
+      `register('service-worker.js?v=5.91')`
+    The browser treats this as a new URL on every version bump, bypassing HTTP cache
+    and forcing a fresh SW download. Combined with skipWaiting()+clients.claim()
+    already in the SW, all open tabs pick up the new build immediately on next load.
+
+    Going forward: bump the ?v= number in the register() call with every release.
+
+    Cache bust: spbm-v591. Splash/title version updated to v5.91.

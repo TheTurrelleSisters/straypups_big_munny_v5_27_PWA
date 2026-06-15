@@ -181,7 +181,7 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;
   -webkit-animation:rp .8s ease infinite alternate;animation:rp .8s ease infinite alternate}
 @-webkit-keyframes rp{from{background:rgba(160,0,0,.18)}to{background:rgba(220,0,0,.30)}}
 @keyframes rp{from{background:rgba(160,0,0,.18)}to{background:rgba(220,0,0,.30)}}
-/* v5.89: blur removed — symbols visible during spin */
+/* v5.91: blur removed — symbols visible during spin */
 #reel-frame.bonus-active{border-color:var(--crim);
   -webkit-animation:rborder .8s ease infinite alternate;animation:rborder .8s ease infinite alternate}
 @-webkit-keyframes rborder{from{box-shadow:0 0 12px rgba(200,0,0,.4)}to{box-shadow:0 0 30px rgba(255,40,0,.7)}}

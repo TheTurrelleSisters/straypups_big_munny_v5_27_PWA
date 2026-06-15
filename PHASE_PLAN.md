@@ -938,3 +938,17 @@ Lazy-T."
     further after testing if it still doesn't feel like enough rotations.
 
 Cache bust: spbm-v588. Splash/title version updated to v5.88.
+
+11. **Smooth ease-out reel stop (v5.89)** — Replaced the 3-phase snap mechanic
+    (constant velocity → overshoot hold → instant snap) with a 2-phase smooth stop:
+    - Phase 1 (0–75% of stopDelay): constant velocity, strip scrolls at full speed.
+    - Phase 2 (75–100% of stopDelay): cubic ease-out deceleration to exact targetY.
+    No overshoot, no snap, no freeze. Sound (sndReelStop) fires when reel fully stops.
+    Removed `.stopping` CSS class usage from spinReel (class removed at stop, not added).
+    Removed reel-strip blur entirely (blur(6px) during .spinning, blur(0) during .stopping)
+    — symbols are now visible and readable throughout the spin.
+    All other game logic unchanged: strip-building, finalGhost, blank symbols, rest-layout
+    rebuild, onStop() callback, STOP_DELAYS, RS_STOP, S.spinning flag — all preserved.
+
+    Cache bust: spbm-v589. Splash/title version updated to v5.89.
+

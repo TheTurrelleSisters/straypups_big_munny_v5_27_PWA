@@ -1103,8 +1103,8 @@ function buildSlot(symId){
   slot.className=symId===6?'reel-slot reel-slot-blank':'reel-slot';
   slot.appendChild(mkSym(symId));return slot;
 }
-/* slotH helpers — sym=47%, blank=4% of window height */
-var SYM_PCT=0.47; var BLK_PCT=0.04;
+/* slotH helpers — sym=47%, blank=3% of window height (v5.91: was 4%) */
+var SYM_PCT=0.47; var BLK_PCT=0.03;
 function symSlotH(winH){return Math.round(winH*SYM_PCT);}
 function blkSlotH(winH){return Math.max(2,Math.round(winH*BLK_PCT));}
 function slotHFor(id,winH){return id===6?blkSlotH(winH):symSlotH(winH);}
@@ -1139,16 +1139,20 @@ function renderReels(syms,ghosts){
   }
 }
 function flashCenter(){
+  // v5.91: payline slot is index 2 ('sym') in the 5-slot
+  // [above2,above,sym,below,below2] layout used by renderReels and the
+  // post-spin trimmed strip. Was index 1 ('above') — flashed the symbol
+  // one row above the payline instead of the actual payline symbol.
   for(var c=0;c<3;c++){
     var strip=document.getElementById('rs'+c);if(!strip) continue;
     var slots=strip.querySelectorAll('.reel-slot');
-    if(slots[1]) slots[1].classList.add('flash');
+    if(slots[2]) slots[2].classList.add('flash');
   }
   setTimeout(function(){
     for(var c2=0;c2<3;c2++){
       var s2=document.getElementById('rs'+c2);if(!s2) continue;
       var sl2=s2.querySelectorAll('.reel-slot');
-      if(sl2[1]) sl2[1].classList.remove('flash');
+      if(sl2[2]) sl2[2].classList.remove('flash');
     }
   },1200);
 }
@@ -1161,10 +1165,7 @@ function spinReel(reelIdx,finalGhost,stopDelay,onStop){
 
   var spinWin=document.getElementById('rw'+reelIdx);
   var spinWinH=spinWin?spinWin.clientHeight:0;
-  var slotH=spinWinH>0?symSlotH(spinWinH):Math.round(reel.offsetHeight*SYM_PCT);
-  if(slotH<10) slotH=SLOT_H;
-  var spinTopOff=spinWinH>0?Math.round(spinWinH/2-slotH*1.5):0;
-  if(slotH<10) slotH=SLOT_H;
+  var winH=spinWinH>0?spinWinH:(_reelWinH>0?_reelWinH:SLOT_H*3);
 
   // v5.90: final 5 ghost symbols FIRST (top of strip), random scroll
   // symbols AFTER. strip.top now INCREASES over time, so the ghosts
@@ -1186,26 +1187,46 @@ function spinReel(reelIdx,finalGhost,stopDelay,onStop){
   var SPIN_SYM_IDS=[0,1,2,3,4,5,6,7];
   for(var i=0;i<36;i++) spinSyms.push(SPIN_SYM_IDS[rng.int(0,7)]);
 
+  // v5.91: per-symbol slot heights (sym=47%, blank/gap id:6=3% of winH) —
+  // same sizing used at rest and during Red Spin, via slotHFor(). Previously
+  // every spin slot (including random gaps) was forced to the uniform 47%
+  // symbol height, so a randomly-rolled gap (id:6) rendered as an
+  // oversized blank rectangle while spinning. Building per-symbol heights
+  // here means gaps read correctly (thin strip) DURING the spin too, and —
+  // combined with the geometry below — the strip's heights never change
+  // across the spin->stop transition, removing the post-stop "snap".
+  var slotHeights=[];
+  for(var hi=0;hi<spinSyms.length;hi++) slotHeights.push(slotHFor(spinSyms[hi],winH));
+
   strip.innerHTML='';
   strip.style.height='auto';
   for(var j=0;j<spinSyms.length;j++){
     var slot=buildSlot(spinSyms[j]);
-    slot.style.height=slotH+'px';
+    slot.style.height=slotHeights[j]+'px';
     slot.style.flex='none';
     strip.appendChild(slot);
   }
 
-  // targetY: center the payline slot ('sym', always index 2 — the 3rd of
-  // the 5-ghost block now at the FRONT of the strip) in the window.
-  // startY: strip position at spin start, placing the LAST random symbol
-  // (index spinSyms.length-1) at that same centered position — the strip
-  // then travels (spinSyms.length-1-centerIdx) slot-heights DOWNWARD
-  // (strip.top increasing) over the spin.
-  // Payline slot top must be at (winH-slotH)/2 = -spinTopOff from window top.
-  // strip.top + centerIdx*slotH = -spinTopOff  =>  strip.top = -spinTopOff - centerIdx*slotH
+  // targetY: strip.top such that slots 1,2,3 (above/sym/below — the 3
+  // slots renderReels shows at rest) land in EXACTLY the same screen
+  // positions as renderReels would place them via stripTopFor(). That
+  // function computes a 3-slot strip's top as
+  // winH/2-(h_above+h_sym+h_below/2) for a strip whose FIRST child is
+  // 'above'. Our 5-slot strip's first child is 'above2' (slotHeights[0]),
+  // one slot earlier, so:
+  //   targetY = stripTopFor([above,sym,below],winH) - slotHeights[0]
+  // This makes the spin strip's final position pixel-identical to a fresh
+  // renderReels() at that position — true zero-snap handoff.
+  // startY: strip.top at spin start, placing the LAST slot (index
+  // spinSyms.length-1) where slot 2 ('sym') will be at the end — i.e. the
+  // strip travels down by the combined height of slots 2..(length-2)
+  // (everything between 'sym' and the second-to-last slot) over the spin.
   var centerIdx=2; // 'sym' ghost — fixed: always 3rd in the 5-ghost block
-  var targetY=spinTopOff-centerIdx*slotH;          // strip.top that centers the payline slot (end)
-  var startY=spinTopOff-(spinSyms.length-1)*slotH; // strip.top at spin start
+  var T3=stripTopFor([finalGhost.above,finalGhost.sym,finalGhost.below],winH);
+  var targetY=T3-slotHeights[0];
+
+  var travelSum=0; for(var ti=centerIdx;ti<spinSyms.length-1;ti++) travelSum+=slotHeights[ti];
+  var startY=targetY-travelSum;
 
   // v5.89: smooth natural stop — no overshoot, no snap-back.
   // Phase 1 (0..t1): constant velocity. Phase 2 (t1..stopDelay): linear
@@ -1235,26 +1256,27 @@ function spinReel(reelIdx,finalGhost,stopDelay,onStop){
         reel.classList.remove('spinning');
         reel.classList.add('stopping');
         sndReelStop();
+        // v5.91: no strip.top/height/position rebuild here — the spin
+        // strip already uses the same per-symbol heights (slotHFor) as the
+        // rest layout, and strip.top is already exactly targetY, so the
+        // strip is pixel-identical to a fresh renderReels() at this
+        // position. Rebuilding geometry was causing a visible post-stop
+        // "snap" as slot heights changed out from under the just-landed
+        // strip. We only wait out the .15s blur-clear CSS transition
+        // (.reel.stopping .reel-strip) before signaling done.
         setTimeout(function(){
           reel.classList.remove('stopping');
-          // Restore 3-slot rest layout with explicit px heights — avoids flex/% height collapse
-          // that occurs when transitioning from willChange compositing layer back to normal flow
-          strip.innerHTML='';
           strip.style.willChange='';
-          var winEl=document.getElementById('rw'+reelIdx);
-          var liveH2=winEl?winEl.clientHeight:0;
-          var winH2=liveH2>0?liveH2:(_reelWinH>0?_reelWinH:SLOT_H*3);
-          var restSlots=[finalGhost.above2,finalGhost.above,finalGhost.sym,finalGhost.below,finalGhost.below2];
-          strip.style.height=stripTotalH(restSlots,winH2)+'px';
-          strip.style.top=stripTopFor(restSlots,winH2)+'px';
-          for(var si=0;si<5;si++){
-            var rs=buildSlot(restSlots[si]);
-            rs.style.height=slotHFor(restSlots[si],winH2)+'px';
-            rs.style.flex='none';
-            strip.appendChild(rs);
-          }
+          // Trim the 36 trailing random scroll slots (already scrolled
+          // off-screen / clipped by .reel-window) so the strip ends with
+          // exactly the 5 [above2,above,sym,below,below2] slots — same
+          // convention renderReels uses, required by flashCenter()/
+          // .reel-slot:nth-child(3) which expect 'sym' (the payline
+          // symbol) at index 2. Pure DOM cleanup: no height or position
+          // changes to the remaining 5 slots, so this is invisible.
+          while(strip.children.length>5) strip.removeChild(strip.lastChild);
           onStop();
-        },80);
+        },150);
       }
       return;
     }

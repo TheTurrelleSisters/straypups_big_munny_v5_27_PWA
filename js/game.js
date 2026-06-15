@@ -698,7 +698,7 @@ function startEntertainmentBalls(){startActiveCaller();}
 function stopEntertainmentBalls(){stopActiveCaller();}
 
 
-/* genBiasedBingoCard(N) — v5.93 replacement for generateCoverAllSpin.
+/* genBiasedBingoCard(N) — v5.88 replacement for generateCoverAllSpin.
    Builds a bingo card whose numbers are BIASED toward the first N balls
    of the EXISTING shared WABC sequence (BG.callSeq) — but does NOT touch
    BG.callSeq / BG.ballPos / BG.matchedCells / BG.seqExhausted at all.
@@ -853,7 +853,7 @@ function doBingoSpin(biasedBalls){
   }
 
   // Fresh card for this spin — biased toward the first N balls if a
-  // force jackpot or custom card generator is armed (v5.93).
+  // force jackpot or custom card generator is armed (v5.88).
   BG.card = biasedBalls ? genBiasedBingoCard(biasedBalls) : genBingoCard();
   BG.cardNumSet={};
   for(var i=0;i<25;i++){if(BG.card[i]!==null) BG.cardNumSet[BG.card[i]]=i;}
@@ -1167,7 +1167,7 @@ function spinReel(reelIdx,finalGhost,stopDelay,onStop){
   if(slotH<10) slotH=SLOT_H;
 
   // Build spin strip: random symbols (mix of all ids including blanks) + final 3
-  // v5.93: 36 scroll symbols (was 18) so the reel visually passes through
+  // v5.88: 36 scroll symbols (was 18) so the reel visually passes through
   // 2-3x more symbol images — reads as a longer, fuller spin.
   var SPIN_SYM_IDS=[0,1,2,3,4,5,6,7];
   var spinSyms=[];
@@ -1193,44 +1193,38 @@ function spinReel(reelIdx,finalGhost,stopDelay,onStop){
   var centerIdx=spinSyms.length-3; // payline is 3rd from end in 5-slot sequence
   var targetY=spinTopOff-centerIdx*slotH; // strip.top that centers payline slot
 
-  // v5.93: no overshoot. Phase 1 constant velocity toward targetY, phase 2 cubic
-  // ease-out into targetY. Smooth natural stop with no snap and no overshoot.
-  var t1=Math.round(stopDelay*0.75); // phase 1 end: constant velocity
-  var t2=stopDelay;                   // phase 2 end: ease-out lands exactly on targetY
-  var coastEndY=targetY*(t1/stopDelay); // position where phase 1 ends (continuous velocity)
+  // v5.89: smooth natural stop — no overshoot, no snap-back.
+  // Phase 1 (0..t1): constant velocity. Phase 2 (t1..stopDelay): linear
+  // deceleration to exactly 0 velocity at targetY. Velocity is continuous
+  // across the t1 boundary (no jump), and the strip lands exactly on
+  // targetY at the end of phase 2 — no overshoot, no instant snap.
+  var t1=Math.round(stopDelay*0.7); // phase 1 end: constant velocity
+  var tauMax=stopDelay-t1;          // phase 2 duration: deceleration
+  var velocity=(2*targetY)/(t1+stopDelay); // px/ms, matches both phases
 
   strip.style.top='0px';
   strip.style.willChange='top';
   reel.classList.add('spinning');
 
   var startTime=null;
-  var snapped=false;
+  var stopped=false;
 
   function frame(ts){
     if(!startTime) startTime=ts;
     var elapsed=ts-startTime;
 
-    if(elapsed<t1){
-      // Phase 1: constant velocity toward targetY
-      strip.style.top=(targetY*(elapsed/stopDelay)).toFixed(1)+'px';
-      requestAnimationFrame(frame);
-
-    } else if(elapsed<t2){
-      // Phase 2: cubic ease-out from coastEndY to targetY — smooth natural stop
-      var raw=(elapsed-t1)/(t2-t1); // 0→1
-      var ease=1-(1-raw)*(1-raw)*(1-raw);
-      strip.style.top=(coastEndY+(targetY-coastEndY)*ease).toFixed(1)+'px';
-      requestAnimationFrame(frame);
-
-    } else {
-      // Fully stopped
-      if(!snapped){
-        snapped=true;
+    if(elapsed>=stopDelay){
+      if(!stopped){
+        stopped=true;
         strip.style.top=targetY.toFixed(1)+'px';
         reel.classList.remove('spinning');
+        reel.classList.add('stopping');
         sndReelStop();
         setTimeout(function(){
-          // Set height+top BEFORE clearing innerHTML — prevents position snap on rebuild
+          reel.classList.remove('stopping');
+          // Restore 3-slot rest layout with explicit px heights — avoids flex/% height collapse
+          // that occurs when transitioning from willChange compositing layer back to normal flow
+          strip.innerHTML='';
           strip.style.willChange='';
           var winEl=document.getElementById('rw'+reelIdx);
           var liveH2=winEl?winEl.clientHeight:0;
@@ -1238,7 +1232,6 @@ function spinReel(reelIdx,finalGhost,stopDelay,onStop){
           var restSlots=[finalGhost.above2,finalGhost.above,finalGhost.sym,finalGhost.below,finalGhost.below2];
           strip.style.height=stripTotalH(restSlots,winH2)+'px';
           strip.style.top=stripTopFor(restSlots,winH2)+'px';
-          strip.innerHTML='';
           for(var si=0;si<5;si++){
             var rs=buildSlot(restSlots[si]);
             rs.style.height=slotHFor(restSlots[si],winH2)+'px';
@@ -1248,12 +1241,26 @@ function spinReel(reelIdx,finalGhost,stopDelay,onStop){
           onStop();
         },80);
       }
+      return;
     }
+
+    var pos;
+    if(elapsed<t1){
+      // Phase 1: constant velocity
+      pos=velocity*elapsed;
+    } else {
+      // Phase 2: linear deceleration from `velocity` to 0, landing on targetY
+      var tau=elapsed-t1;
+      pos=velocity*t1+velocity*tau-0.5*(velocity/tauMax)*tau*tau;
+    }
+    strip.style.top=pos.toFixed(1)+'px';
+    requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
+
 }
 function animateReels(spinData,cb){
-  var STOP_DELAYS=[1200,2000,2900];sndSpinStart(); /* v5.93: ~2x duration to match the longer scroll (2-3 full rotations) */
+  var STOP_DELAYS=[1200,2000,2900];sndSpinStart(); /* v5.88: ~2x duration to match the longer scroll (2-3 full rotations) */
   for(var ri=0;ri<3;ri++) document.getElementById('r'+ri).classList.add('spinning');
   var done=0;
   function onReelStop(r){return function(){done++;if(done===3) setTimeout(cb,100);};}
@@ -1302,7 +1309,7 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
     var reelSyms=REEL_SYMS[pat.reel]||REEL_SYMS['none'];
     var sr=forcedSpinResult(reelSyms);
     sndBonusSpin();
-    var RS_STOP=[1000,1600,2300];var rsDone=0; /* v5.93: ~2x duration, matches main spin scroll length */
+    var RS_STOP=[1000,1600,2300];var rsDone=0; /* v5.88: ~2x duration, matches main spin scroll length */
     for(var ri3=0;ri3<3;ri3++){
       (function(rIdx){spinReel(rIdx,sr.ghosts[rIdx],RS_STOP[rIdx],function(){rsDone++;});})(ri3);
     }
@@ -1310,7 +1317,7 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
       var payAmt=pat.pay[cpl-1];
       if(pat.isProgressive&&progCtx){
         /* Progressive Jackpot — grand finale. Reels already show 'coverall'
-           symbols (just landed). v5.93: the DB claim (armAndClaim) now
+           symbols (just landed). v5.88: the DB claim (armAndClaim) now
            fires HERE, when Lazy-T actually lands — NOT before Red Spin
            started. This is what makes "the jackpot doesn't occur until
            Lazy-T is confirmed as a hit": other players' Attitude Check
@@ -1371,7 +1378,7 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
           }
         },500);return;
       }
-      /* v5.93: Corporal Stripes when Lazy-T is ALSO winning (progCtx set)
+      /* v5.88: Corporal Stripes when Lazy-T is ALSO winning (progCtx set)
          now falls through to the SAME display as every other pattern
          (setWin/flashCenter/pause) instead of being skipped straight to
          playNext(). Red overlay stays active throughout — playNext()
@@ -1413,7 +1420,7 @@ function doSpin(){
     _forceJP=Progressive.contribute(S.cpl);
     if(_forceJP){
       /* Operator (or random-trigger) armed a force_jackpot command —
-         v5.93: bias this spin's card toward the first 24 balls so
+         v5.88: bias this spin's card toward the first 24 balls so
          Cover-All (and therefore Lazy-T as the natural finale) completes
          genuinely. The arm is claimed naturally inside runRS when Lazy-T
          lands; if this particular card doesn't quite complete it, the
@@ -1531,7 +1538,7 @@ function doSpin(){
             _allPatsBonus+=winPatterns[_api].pay[S.cpl-1]*_denom;
           }
         }
-        /* v5.93: armAndClaim no longer happens here — it fires inside
+        /* v5.88: armAndClaim no longer happens here — it fires inside
            runRS, only once Lazy-T actually lands (see runRS's
            isProgressive branch). This applies equally to natural wins and
            operator/random-trigger-forced wins (the forced card was built
@@ -1577,7 +1584,7 @@ function doSpin(){
     });
   } // end _continueSpinAfterClaim
 
-  /* v5.93: no more upfront claimForce()/generateCoverAllSpin() here — the
+  /* v5.88: no more upfront claimForce()/generateCoverAllSpin() here — the
      card bias (if any) was already applied via doBingoSpin(_biasedBalls)
      above, doBingoSpin's normal ball-by-ball loop evaluated winPatterns
      naturally, and (for progressive wins) armAndClaim now fires inside

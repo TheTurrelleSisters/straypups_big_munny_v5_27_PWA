@@ -939,78 +939,51 @@ Lazy-T."
 
 Cache bust: spbm-v588. Splash/title version updated to v5.88.
 
-11. **Smooth ease-out reel stop (v5.89)** — Replaced the 3-phase snap mechanic
-    (constant velocity → overshoot hold → instant snap) with a 2-phase smooth stop:
-    - Phase 1 (0–75% of stopDelay): constant velocity, strip scrolls at full speed.
-    - Phase 2 (75–100% of stopDelay): cubic ease-out deceleration to exact targetY.
-    No overshoot, no snap, no freeze. Sound (sndReelStop) fires when reel fully stops.
-    Removed `.stopping` CSS class usage from spinReel (class removed at stop, not added).
-    Removed reel-strip blur entirely (blur(6px) during .spinning, blur(0) during .stopping)
-    — symbols are now visible and readable throughout the spin.
-    All other game logic unchanged: strip-building, finalGhost, blank symbols, rest-layout
-    rebuild, onStop() callback, STOP_DELAYS, RS_STOP, S.spinning flag — all preserved.
 
-    Cache bust: spbm-v589. Splash/title version updated to v5.89.
+### v5.89 — Smooth Reel Stop, Critical _forceArmed Reset Fix (2nd-spin freeze)
 
+- **Smooth natural reel stop (no overshoot/snap)**: spinReel's stop
+  animation previously scrolled past the target by 0.6 slots, held there
+  briefly, then INSTANTLY SNAPPED back to the exact target ("mechanical
+  thud"). Replaced with a single continuous motion: 70% of stopDelay at
+  constant velocity, then 30% linear deceleration to exactly 0 velocity
+  AT targetY — velocity-matched at the phase boundary (no jump), lands
+  exactly on target with no overshoot and no snap. centerIdx/targetY/
+  stopDelay all unchanged from v5.88 (still ~2x duration / 36 scroll
+  symbols) — only the STOP MOTION changed.
 
-12. **Reel direction fix + snap elimination (v5.90)** — Two bugs fixed in spinReel:
+- **CRITICAL FIX — "2nd spin freeze / blank card / ball call cells
+  corrupted" bug**: root cause was in _claimForceWin (js/progressive.js,
+  both games) — on a SUCCESSFUL claim, _forceArmed and _forceCommandId
+  were NEVER reset (only _forceClaimed=true was set). This was harmless
+  pre-v5.88 (the old claimForce path checked _forceClaimed directly), but
+  v5.88's contribute() returns _forceArmed DIRECTLY to decide
+  _biasedBalls=24 for genBiasedBingoCard -- so after ANY successful
+  jackpot claim, EVERY subsequent spin kept biasing toward a 24-ball
+  Cover-All. This made BG._coverAll1to40 true on nearly every spin,
+  firing _handleCoverAll(true)/_requestNewWABCSequence() repeatedly,
+  racing with the next spin's doBingoSpin and corrupting
+  BG.callSeq/matchedCells -- "card goes blank, ball call cells affected,
+  around the 2nd spin" (i.e. the spin AFTER any jackpot claim).
+  Fix: _claimForceWin's success path now resets _forceArmed=false;
+  _forceCommandId=null; immediately after a successful claim.
 
-    BUG 1 — Wrong spin direction (reels spun upward):
-    v5.89 set strip.top=0 and animated toward targetY (negative) — strip moved UP.
-    Fix: strip now starts at startY = targetY - (36 * slotH), which is far above
-    the viewport. Animation travels startY → targetY (less negative = strip moves DOWN).
-    Symbols now visibly fall downward, matching real slot machine behaviour.
+  IMPORTANT FOR THIS DEPLOY: if progressive_commands has any leftover
+  status='armed' rows from EARLIER test sessions (before this fix
+  existed), _checkArmedCommand() would still set _forceArmed=true from
+  spin 1 of a fresh session. Before testing, run:
+    SELECT id, command, status, created_by, created_at
+      FROM progressive_commands WHERE status='armed';
+  and cancel anything stale:
+    UPDATE progressive_commands SET status='cancelled' WHERE id=<id>;
 
-    BUG 2 — Snap at rest-layout rebuild:
-    After stop, innerHTML was cleared and rebuilt with stripTopFor() which uses
-    variable slot heights (blanks are tiny via blkSlotH). This gave a different
-    strip.top than targetY → visible position jump. Fix: set strip.style.top to
-    stripTopFor() value BEFORE clearing innerHTML (not after), so the DOM swap
-    is invisible. Height is also set before the clear for the same reason.
+- **Pattern threshold review (no code change)**: BINGO_PATTERNS' balls
+  thresholds (Pyramid=29, G Flat=36, Stepladder=36, etc.) were confirmed
+  correct per Sasha's examples. Discussed the cumulative (stacking)
+  nature of thresholds vs. an exclusive-tier model -- confirmed current
+  cumulative/stacking design is intentional and stays as-is. Custom
+  Bingo Card Generator's interaction with Lazy-T (it can stack the real
+  progressive jackpot if Lazy-T naturally completes on a biased card)
+  was flagged but left as-is per Sasha's direction ("leave it as is").
 
-    No other logic changed. All game functions, blank symbols, finalGhost,
-    STOP_DELAYS, RS_STOP, S.spinning flag all preserved.
-
-    Cache bust: spbm-v590. Splash/title version updated to v5.90.
-
-13. **Force SW update to all players (v5.91)** — Previous cache busts only changed
-    the CACHE name inside service-worker.js, but the SW file itself was registered
-    without a version string: `register('service-worker.js')`. If the server's HTTP
-    cache headers gave the SW file any max-age, browsers would keep running the old
-    SW indefinitely and never pick up changes.
-
-    Fix: SW registration now includes a version query string:
-      `register('service-worker.js?v=5.91')`
-    The browser treats this as a new URL on every version bump, bypassing HTTP cache
-    and forcing a fresh SW download. Combined with skipWaiting()+clients.claim()
-    already in the SW, all open tabs pick up the new build immediately on next load.
-
-    Going forward: bump the ?v= number in the register() call with every release.
-
-    Cache bust: spbm-v591. Splash/title version updated to v5.91.
-
-14. **Snap fix only — v5.88 spin behaviour restored (v5.92)** — Reverted all spin
-    direction/restructuring changes from v5.89-v5.91 which broke the 2-3 rotation
-    spin. Returned to exact v5.88 spinReel logic (top=0 → targetY, overshoot, phase
-    timing) with one targeted change only:
-
-    BEFORE (v5.88): Phase 2 held at overshootY, Phase 3 instantly snapped to targetY.
-    AFTER  (v5.92): Phase 2 cubic ease-out from overshootY → targetY. No Phase 3.
-    t2 is now stopDelay (was stopDelay*0.90) so the full remaining 25% is used to
-    ease smoothly into the final position. No freeze, no snap, no jump.
-
-    Also fixed: rest-layout rebuild sets strip.style.height and strip.style.top
-    BEFORE clearing innerHTML, so the DOM swap is invisible (no position snap).
-
-    Everything else identical to v5.88: strip order, STOP_DELAYS, RS_STOP, blur
-    removed in v5.89 kept removed, SW registration ?v= cache bust kept from v5.91.
-
-    Cache bust: spbm-v592. Splash/title version updated to v5.92.
-
-15. **Remove overshoot entirely (v5.93)** — v5.92 still had overshootY in phase 1
-    causing visible overshoot before easing back. Removed overshootExtra/overshootY
-    completely. Phase 1 now travels at constant velocity straight toward targetY.
-    Phase 2 cubic ease-out from coastEndY (75% of targetY) to exact targetY.
-    Pure smooth deceleration, no overshoot, no snap.
-
-    Cache bust: spbm-v593. Splash/title version updated to v5.93.
+- Cache bust: spbm-v589. Splash/title version updated to v5.89.

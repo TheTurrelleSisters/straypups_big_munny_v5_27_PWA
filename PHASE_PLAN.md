@@ -80,7 +80,7 @@ is PRESERVED — only spinReel changed.
 - Script query strings updated: game.js?v=v5.92, progressive.js?v=v5.92
 
 
-## Current Version: v5.92
+## Current Version: v5.90
 
 ---
 
@@ -1102,3 +1102,29 @@ Two follow-ups to v5.89's smooth-stop testing:
   without obscuring the strip.
 
 Cache bust: spbm-v590. Splash/title version updated to v5.90.
+
+
+### v5.93 — EMERGENCY: Service Worker Cache Fix (Splash Screen Lockout)
+
+**ROOT CAUSE (audit finding):** Service worker listed `./icon-192.png` and
+`./icon-512.png` in FILES cache list. These files DO NOT EXIST at the root of
+this repo — they live at `./assets/icons/icon-192x192.png` etc. Since
+`cache.addAll()` is atomic, ONE missing file causes the ENTIRE install to fail.
+The PWA install never completed, leaving the old broken cache in place and the
+game stuck at the splash screen on EVERY load.
+
+Additionally: CACHE version was `spbm-v590` but the last delivered build was
+v5.92 — cache was never bumped, so even if install had succeeded, browsers
+would have served stale cached files.
+
+**Fixes applied:**
+- `service-worker.js`: corrected icon paths to `./assets/icons/icon-192x192.png`
+  and `./assets/icons/icon-512x512.png` (files confirmed present)
+- `service-worker.js`: bumped CACHE to `spbm-v593`
+- `index.html`: updated `<title>`, `#splash-ver`, and all script `?v=` query
+  strings to `v5.93`
+
+**PERMANENT RULE REINFORCED:** Cache bust = CACHE string + ALL ?v= query strings
++ splash/title version display — all four must change together, every build.
+
+- Cache bust: spbm-v593

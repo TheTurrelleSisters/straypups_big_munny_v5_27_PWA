@@ -4,7 +4,83 @@
 
 ---
 
-## Current Version: v5.54 (cache: spbm-v554)
+---
+
+---
+
+---
+
+## v5.90 — spinReel direction fix: bottom+column-reverse approach
+
+### Problem
+All previous CSS-transition spinReel attempts animated strip.top from 0 to a
+large negative value. This moves the strip UP, making symbols appear to scroll
+UPWARD — wrong direction.
+
+### Fix
+Switched to bottom+column-reverse positioning during spin:
+- strip.style.flexDirection = 'column-reverse' (reverses visual symbol order)
+- strip.style.bottom = startBottom (large positive, strip starts high)
+- Animate bottom: startBottom -> targetBottom (decreasing = strip moves DOWN)
+= symbols enter from TOP, scroll DOWNWARD through window ✓
+
+After transitionend, rest strip is rebuilt using the original top positioning
+(unchanged), so the at-rest display is unaffected.
+
+This approach matches the working preview HTML that Sasha confirmed looked correct.
+
+## v5.89 — spinReel direction fix (compositor ordering)
+
+### Problem
+CSS transition spinReel introduced in v5.87/v5.88 was still spinning upward
+(wrong direction) on real devices. Root cause: `animateReels` was calling
+`reel.classList.add('spinning')` on all 3 reels BEFORE `spinReel` ran,
+promoting a compositor layer while the strip still had its old rest `top`
+value. The double-rAF inside `spinReel` then animated FROM that old value
+rather than from `top=0`, making it appear to spin upward.
+
+### Fix
+- Removed `reel.classList.add('spinning')` pre-call from `animateReels`
+- Inside `spinReel`: set `top=0` and build strip DOM first (no classes active),
+  then first rAF adds `spinning` class, then second rAF applies the CSS
+  transition from `top=0` -> `targetY` (large negative = strip moves up =
+  symbols scroll downward through window, correct direction)
+- `transitionend` callback rebuilds rest strip cleanly with no overlap
+- All bingo logic, ghost data, STRIPS untouched — reel animation only
+
+
+## v5.92 — spinReel reverted to v5.87 (both games)
+
+### Problem diagnosed
+Post-v5.88 reel rewrites (v5.89/v5.90 spin-direction fix) introduced 3 regressions:
+1. 3rd reel showing blank spaces (strip height/layout collapsing on the 3rd reel)
+2. Visible snap/thud at reel stop (velocity mismatch: v5.90 startY/targetY
+   calculation left the strip far off-position at frame 0, causing a jump)
+3. Big lag during spinning (36-symbol strip + CSS transform on long strip caused
+   GPU compositing cost; also positive-travel direction confused the phase timing)
+4. Reels landing on wins with no matching bingo patterns (reel visual was
+   decoupled from the underlying ghost/symbol data — blank reel = wrong symbol
+   being displayed, so the 'win' animation fired on a mismatch)
+
+### Fix: transplanted v5.87 spinReel verbatim from GitHub commit
+-  game: commit 6470d5b (v5.87) spinReel
+-  game: commit 2d3006a (v5.87) spinReel
+The v5.87 spinReel uses 18 random scroll symbols followed by the 5 ghost symbols
+at the END of the strip. centerIdx = spinSyms.length-3 (3rd from end). Strip
+travels negative (upward) — the original working direction. Overshoot (~0.6
+slots past target) + snap-back is present and intentional — gives the mechanical
+'thud' feel that was always there through v5.87. All helpers (symSlotH,
+blkSlotH, stripTopFor, stripTotalH, buildSlot, SLOT_H, SYM_PCT) are identical
+between v5.87 and current, so the transplant is a clean drop-in with no
+dependency changes.
+All post-v5.87 work (progressive syntax fix, _forceArmed reset, Custom Bingo
+Card Generator, WABC shared sequence, PROG_GAME_TITLES maxine entry, etc.)
+is PRESERVED — only spinReel changed.
+- Cache bust: spbm-v592
+- Script query strings updated: game.js?v=v5.92, progressive.js?v=v5.92
+
+
+## Current Version: v5.90
 
 ---
 

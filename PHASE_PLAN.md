@@ -80,7 +80,7 @@ is PRESERVED — only spinReel changed.
 - Script query strings updated: game.js?v=v5.92, progressive.js?v=v5.92
 
 
-## Current Version: v5.90
+## Current Version: v5.92
 
 ---
 

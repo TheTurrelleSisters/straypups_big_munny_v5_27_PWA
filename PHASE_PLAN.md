@@ -4,7 +4,40 @@
 
 ---
 
-## Current Version: v5.91 (cache: spbm-v591)
+---
+
+## v5.92 — spinReel reverted to v5.87 (both games)
+
+### Problem diagnosed
+Post-v5.88 reel rewrites (v5.89/v5.90 spin-direction fix) introduced 3 regressions:
+1. 3rd reel showing blank spaces (strip height/layout collapsing on the 3rd reel)
+2. Visible snap/thud at reel stop (velocity mismatch: v5.90 startY/targetY
+   calculation left the strip far off-position at frame 0, causing a jump)
+3. Big lag during spinning (36-symbol strip + CSS transform on long strip caused
+   GPU compositing cost; also positive-travel direction confused the phase timing)
+4. Reels landing on wins with no matching bingo patterns (reel visual was
+   decoupled from the underlying ghost/symbol data — blank reel = wrong symbol
+   being displayed, so the 'win' animation fired on a mismatch)
+
+### Fix: transplanted v5.87 spinReel verbatim from GitHub commit
+-  game: commit 6470d5b (v5.87) spinReel
+-  game: commit 2d3006a (v5.87) spinReel
+The v5.87 spinReel uses 18 random scroll symbols followed by the 5 ghost symbols
+at the END of the strip. centerIdx = spinSyms.length-3 (3rd from end). Strip
+travels negative (upward) — the original working direction. Overshoot (~0.6
+slots past target) + snap-back is present and intentional — gives the mechanical
+'thud' feel that was always there through v5.87. All helpers (symSlotH,
+blkSlotH, stripTopFor, stripTotalH, buildSlot, SLOT_H, SYM_PCT) are identical
+between v5.87 and current, so the transplant is a clean drop-in with no
+dependency changes.
+All post-v5.87 work (progressive syntax fix, _forceArmed reset, Custom Bingo
+Card Generator, WABC shared sequence, PROG_GAME_TITLES maxine entry, etc.)
+is PRESERVED — only spinReel changed.
+- Cache bust: spbm-v592
+- Script query strings updated: game.js?v=v5.92, progressive.js?v=v5.92
+
+
+## Current Version: v5.92 (cache: spbm-v592)
 
 ---
 
@@ -16,7 +49,7 @@ Class II bingo PWA. $1 denomination. All wins determined by bingo patterns. Reel
 ## Stack
 - ES5 only — no arrow functions, const, let, backticks, async/await
 - Supabase: gdmmoeggkqsvqnqyrubx.supabase.co
-- Service worker cache: spbm-v591
+- Service worker cache: spbm-v551
 - Key files: js/game.js, js/progressive.js, js/config.js, js/operator.js, wabc.js, broadcast-init.js
 - Root copies of game.js and progressive.js must always stay in sync with js/ versions
 
@@ -119,7 +152,7 @@ Class II bingo PWA. $1 denomination. All wins determined by bingo patterns. Reel
 
 ---
 
-## Current Version: v5.54 (cache: spbm-v554) — *historical snapshot, superseded by entries below; see top-of-file for live current version*
+## Current Version: v5.54 (cache: spbm-v554)
 
 ## Pending
 - [ ] Confirm operator tools connect after presence throttle fix
@@ -1026,98 +1059,3 @@ Two follow-ups to v5.89's smooth-stop testing:
   without obscuring the strip.
 
 Cache bust: spbm-v590. Splash/title version updated to v5.90.
-
-> **Audit note (added in v5.91):** v5.89's "Smooth Reel Stop" and v5.90's
-> direction/blur follow-up did NOT fully resolve the reel-rendering
-> issues — two bugs remained and are fixed below:
-> (1) random scroll symbols used a uniform 47% slot height, so a
-> randomly-rolled gap/blank (id:6) rendered as an oversized blank
-> rectangle during the spin (most noticeable on reel 3, the longest
-> spin); (2) the post-stop strip rebuild (80ms setTimeout, full
-> innerHTML replace + new heights/top) changed slot heights out from
-> under the just-landed strip, producing a visible "snap" immediately
-> after the smooth stop landed. v5.89/v5.90's core velocity-matched
-> deceleration MATH was correct and is preserved unchanged in v5.91 —
-> only the slot-height handling and post-stop DOM step were wrong.
-
-
-### v5.91 — Spin Geometry Rewrite: Correct Blank Sizing, True Zero-Snap Stop, Payline Index Fix
-
-- **Blank/gap slot height reduced 4% -> 3%** (BLK_PCT in js/game.js).
-  Applies uniformly to rest-state (renderReels), spinning, and Red Spin —
-  all three paths share slotHFor()/BLK_PCT, so there is only one place
-  this is defined.
-
-- **CRITICAL FIX — oversized blank cells during spin (reported on reel
-  3)**: spinReel's 36 random scroll symbols (SPIN_SYM_IDS includes id:6,
-  Gap) were ALL given the uniform 47% symbol height. Any randomly-rolled
-  Gap therefore rendered as a large pale 47%-height rectangle scrolling
-  through — most visible on reel 3 (longest stopDelay=2900ms, more
-  symbols pass through). Fixed: every spin slot now gets
-  slotHFor(spinSyms[j], winH) — gaps render as thin ~3% strips during the
-  spin too, identical to their rest-state appearance. Affects all 3
-  reels; reel 3 was just the most visible due to spin duration.
-
-- **CRITICAL FIX — post-stop "snap"**: removed the 80ms post-stop
-  setTimeout that did strip.innerHTML='' + rebuilt the strip with
-  rest-layout heights (slotHFor) and a freshly-computed
-  stripTopFor/stripTotalH top+height. Because the spin strip now ALREADY
-  uses slotHFor() per slot (previous bullet) AND lands at a targetY
-  derived to be screen-position-identical to renderReels' positioning
-  (see next bullet), that rebuild was changing slot heights/position out
-  from under the strip immediately after the v5.89 smooth stop landed —
-  this was the "snap". Replaced with: wait out the existing .15s
-  .reel.stopping blur-clear CSS transition, clear willChange, done — no
-  geometry change at all post-stop.
-
-- **targetY/startY re-derived for variable slot heights**: v5.89/v5.90
-  used centerIdx*slotH with a single uniform slotH; with per-symbol
-  heights that no longer works. New formulas (js/game.js spinReel):
-    targetY = stripTopFor([above,sym,below], winH) - slotHeights[0]
-  (slotHeights[0] = height of 'above2', the 5-slot strip's first child;
-  stripTopFor's 3-slot formula centers 'sym' at winH/2 — subtracting
-  above2's height converts that into the 5-slot strip's top, giving a
-  position PIXEL-IDENTICAL to a fresh renderReels() call).
-    startY = targetY - sum(slotHeights[2..length-2])
-  (places the LAST scroll slot where 'sym' will end up; strip then
-  travels down by the combined height of everything between 'sym' and
-  the last slot — content flows top-to-bottom per v5.90). The v5.89
-  velocity-matched constant-then-decelerate formula is UNCHANGED, just
-  fed the new targetY/startY/travel.
-
-- **Post-stop DOM trim (lightweight, no geometry change)**: after the
-  .15s blur-clear, the 36 trailing (now off-screen/clipped) random scroll
-  slots are removed via `while(strip.children.length>5)
-  strip.removeChild(strip.lastChild)`. No height or top changes — purely
-  DOM cleanup, invisible to the player. Leaves the strip in the same
-  5-slot [above2,above,sym,below,below2] shape renderReels produces.
-  Spin duration/rotation count UNCHANGED (still 36 scroll symbols + 5
-  ghosts, STOP_DELAYS=[1200,2000,2900] — reels still complete several
-  full rotations before stopping).
-
-- **flashCenter() + CSS payline-highlight index fix**: separate
-  pre-existing bug (not introduced by v5.89/v5.90) — both flashCenter()
-  and .reel-slot:nth-child(2) assumed the payline symbol was the strip's
-  2nd child (index 1). In the [above2,above,sym,below,below2] layout the
-  payline symbol ('sym') is the 3RD child (index 2); index 1 is 'above',
-  the symbol one row above the payline. Net effect: the win-flash
-  animation and the "landing zone" brighter-background highlight were
-  both applied to the wrong row (one above the actual payline/winning
-  symbol). Fixed: flashCenter() now targets slots[2]; CSS rule renamed to
-  .reel-slot:nth-child(3). The v5.91 post-stop trim ensures the strip is
-  always exactly 5 slots in this order after a spin, so index 2 is
-  reliably 'sym' in both the post-spin and initial-render
-  (renderReels-only) cases.
-
-- **New latent bug found, NOT fixed in this pass (flag for review)**:
-  CURRENT_SYMS/CURRENT_GHOSTS (used by renderReels, called from
-  initReelSlots on resize/orientation-change) are set only by
-  renderReels itself — spinReel/animateReels never update them. If a
-  player resizes/rotates their device shortly after a spin completes,
-  initReelSlots->renderReels will redraw using the PREVIOUS spin's
-  ghosts/syms, not the result just landed. Pre-existing (not caused by
-  v5.89/5.90/5.91). Recommend: have animateReels' completion callback (or
-  spinReel itself) update CURRENT_SYMS/CURRENT_GHOSTS per reel before
-  calling onStop.
-
-- Cache bust: spbm-v591. Splash/title version updated to v5.91.

@@ -161,9 +161,7 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;
 /* blank stop — looks like dark reel tape between symbols */
 .reel-slot-blank{background:#f5f0e8} /* blank = clean white — unambiguous loss */
 /* center payline slot gets a subtly brighter bg so it reads as the landing zone */
-/* v5.91: was nth-child(2) ('above', index1) — payline slot in the
-   [above2,above,sym,below,below2] layout is the 3rd child ('sym', index2) */
-.reel-slot:nth-child(3){background:#fffdf5;box-shadow:inset 0 0 8px rgba(255,220,100,.12)}
+.reel-slot:nth-child(2){background:#fffdf5;box-shadow:inset 0 0 8px rgba(255,220,100,.12)}
 .reel-slot svg,.reel-slot img{width:95%;height:95%;object-fit:contain;display:block;pointer-events:none}
 .reel-slot.flash{-webkit-animation:cf .25s ease infinite alternate;animation:cf .25s ease infinite alternate}
 @-webkit-keyframes cf{from{background:#fffde0}to{background:#ffe060;box-shadow:inset 0 0 14px rgba(255,200,0,.6)}}
@@ -172,10 +170,11 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;
   background:var(--gold);border-radius:3px;z-index:10;top:calc(50% - 7px)}
 .scell{display:none}
 
-#payline-mark{display:block;position:absolute;left:6px;right:6px;top:50%;
+#payline-mark{display:block;position:absolute;left:0;right:0;top:50%;
   -webkit-transform:translateY(-50%);transform:translateY(-50%);
-  height:3px;background:linear-gradient(90deg,rgba(255,136,0,.0),rgba(255,136,0,.8) 20%,rgba(255,60,0,.95) 50%,rgba(255,136,0,.8) 80%,rgba(255,136,0,.0));
-  pointer-events:none;z-index:25;border-radius:2px;box-shadow:0 0 8px rgba(255,100,0,.7)}
+  height:4px;background:#cc0000;
+  pointer-events:none;z-index:25;
+  box-shadow:0 0 6px 2px rgba(255,0,0,.7),0 0 12px 4px rgba(255,0,0,.4)}
 
 #red-ov{position:absolute;inset:0;pointer-events:none;z-index:6;background:transparent;
   -webkit-transition:background .4s;transition:background .4s}

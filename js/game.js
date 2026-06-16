@@ -1371,6 +1371,7 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
   }
   setTimeout(playNext,200);
 }
+}
 
 /* â”€â”€ MAIN SPIN â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
 function doSpin(){
@@ -2005,4 +2006,3 @@ document.querySelectorAll('.icpre').forEach(function(btn){btn.addEventListener('
 document.getElementById('ic-ov').addEventListener('click',function(e){if(e.target===this)this.classList.remove('on');});
 
 }());
-

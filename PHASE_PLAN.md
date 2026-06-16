@@ -1128,3 +1128,19 @@ would have served stale cached files.
 + splash/title version display — all four must change together, every build.
 
 - Cache bust: spbm-v593
+
+
+### v5.94 — CRITICAL: Missing Closing Brace in runRS() (Syntax Error)
+
+**ROOT CAUSE:** `function runRS()` (line 1262) was missing its closing `}`.
+The nested `function playNext()` closed correctly at line 1373, but `runRS`
+itself had no closing brace. This left brace depth at 2 instead of 1 at the
+end of the file, causing V8 to reject the entire `game.js` with
+`SyntaxError: Unexpected token ')'` at the final `}());` IIFE closure.
+
+The game would not load past the splash screen on any deployed device.
+
+**Fix:** Inserted a single `}` after line 1373 to close `runRS()`.
+**Applied to:** both bingo games ($1 and $5) and Maxine's Wild Cherries.
+
+- Cache bust: spbm-v594

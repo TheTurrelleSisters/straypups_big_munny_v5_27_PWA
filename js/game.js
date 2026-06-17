@@ -1200,6 +1200,24 @@ function spinReel(reelIdx,finalGhost,stopDelay,onStop){
   var startTime=null;
   var snapped=false;
 
+  /* v5.100 FIX: rAF timeout fallback — if requestAnimationFrame is throttled
+     or stopped (mobile screen lock, backgrounded tab), onStop never fires and
+     the Red Spin freezes permanently. This fallback fires onStop after
+     stopDelay + 500ms regardless of rAF state, ensuring the spin always
+     completes even with zero animation. */
+  var _rafDone=false;
+  var _rafFallback=setTimeout(function(){
+    if(_rafDone) return;
+    _rafDone=true;
+    snapped=true;
+    strip.style.top=targetY.toFixed(1)+'px';
+    reel.classList.remove('spinning');
+    reel.classList.remove('stopping');
+    strip.innerHTML='';
+    strip.style.willChange='';
+    onStop();
+  }, stopDelay+500);
+
   function frame(ts){
     if(!startTime) startTime=ts;
     var elapsed=ts-startTime;
@@ -1216,6 +1234,8 @@ function spinReel(reelIdx,finalGhost,stopDelay,onStop){
     } else {
       if(!snapped){
         snapped=true;
+        _rafDone=true;
+        clearTimeout(_rafFallback);
         strip.style.top=targetY.toFixed(1)+'px';
         reel.classList.remove('spinning');
         reel.classList.add('stopping');
@@ -1257,8 +1277,18 @@ function showJP(jpAmt,cb){
   var amtEl=document.getElementById('jp-amt');
   if(amtEl) amtEl.textContent=fmt(jpAmt);
   sndJackpot();el.classList.add('on');
-  el.onclick=function(){el.classList.remove('on');el.onclick=null;if(cb)cb();};
-  el.ontouchend=function(e){e.preventDefault();el.classList.remove('on');el.ontouchend=null;if(cb)cb();};
+  /* v5.98: _dismissed guard prevents double-callback on touch devices
+     where ontouchend AND onclick both fire on a single tap. */
+  var _dismissed=false;
+  function _doJPDismiss(){
+    if(_dismissed) return;
+    _dismissed=true;
+    el.classList.remove('on');
+    el.onclick=null; el.ontouchend=null;
+    if(cb) cb();
+  }
+  el.onclick=function(){_doJPDismiss();};
+  el.ontouchend=function(e){e.preventDefault();_doJPDismiss();};
 }
 
 /* â”€â”€ RED SPIN (bingo-driven) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€ */
@@ -1495,7 +1525,7 @@ function doSpin(){
              Player 1 gets full pot, Player 2 gets seed amount.
              Both pay via the same sequential award flow + celebration.
              Progressive.hit() never called — DB is sole payment authority. */
-          Progressive.armAndClaim(function(didWin, _progAmt) {
+          Progressive.armAndClaim(winPatterns, function(didWin, _progAmt) {
             _finishProgressiveSpin(_progAmt+_allPatsBonus, winPatterns,
                                     basePat, _spinCardSerial, _spinBalBefore);
           });

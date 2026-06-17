@@ -958,9 +958,10 @@ function forcedSpinResult(syms){
    - Gap present with no cherry/wild = safe non-win */
 function evalSpin(grid){
   var L=[grid[0][1],grid[1][1],grid[2][1]];
-  // Blank first — most common symbol (~50% of stops), short-circuits fastest
-  if(L[0]===6||L[1]===6||L[2]===6) return{amt:0};
-  // Any cherry on any reel = always looks like Open Diamond pay
+  // v5.95 FIX: win-looking checks MUST run before blank short-circuit.
+  // Previously blank ran first (~50% frequency), causing blank/cherry or
+  // blank/wild combos to exit as SAFE without ever checking the other reels.
+  // Any cherry on any reel = always looks like Open Diamond pay — reject first.
   if(L[0]===5||L[1]===5||L[2]===5) return{amt:1};
   // Any wild (SP=0 or Progressive=7) on payline = win-looking = rejected.
   // 2x Progressive combos only appear via forcedSpinResult on bingo wins.
@@ -971,6 +972,8 @@ function evalSpin(grid){
   // All 3 are bars in any mix — use hardcoded check (PAY/BARS vars removed)
   var isBar=function(s){return s===2||s===3||s===4;};
   if(isBar(L[0])&&isBar(L[1])&&isBar(L[2])) return{amt:1};
+  // Blank present with no win-looking combo = safe non-win (fallback)
+  if(L[0]===6||L[1]===6||L[2]===6) return{amt:0};
   return{amt:0};
 }
 
@@ -1291,6 +1294,9 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
     var sr=forcedSpinResult(reelSyms);
     sndBonusSpin();
     var RS_STOP=[500,800,1100];var rsDone=0; /* v5.70 timing */
+    /* v5.96 FIX: spinReel calls were missing — _onReelDone was defined but
+       never triggered, causing Red Spin to hang permanently on every pattern. */
+    for(var _ri=0;_ri<3;_ri++){(function(r){spinReel(r,sr.ghosts[r],RS_STOP[r],_onReelDone);}(_ri));}
     function _onReelDone(){
       rsDone++;
       if(rsDone<3) return; /* wait for all 3 reels to finish */

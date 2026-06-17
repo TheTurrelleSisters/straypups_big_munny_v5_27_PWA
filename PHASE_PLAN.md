@@ -80,7 +80,7 @@ is PRESERVED — only spinReel changed.
 - Script query strings updated: game.js?v=v5.92, progressive.js?v=v5.92
 
 
-## Current Version: v5.100
+## Current Version: v5.101
 
 ---
 
@@ -195,7 +195,7 @@ Class II bingo PWA. $1 denomination. All wins determined by bingo patterns. Reel
 
 ---
 
-## Current Version: v5.100
+## Current Version: v5.101
 
 ## Pending
 - [ ] Confirm operator tools connect after presence throttle fix
@@ -1147,95 +1147,39 @@ The game would not load past the splash screen on any deployed device.
 
 ---
 
-### v5.97 — v5.97 Bug Fix Pass ($1 Bingo)
+### v5.101 — Bug Fix + Red Spin Cross-Browser Fix
 
-**Fixes applied:**
-- **Fix armAndClaim argument order (game.js): `Progressive.armAndClaim(winPatterns, callback)` — winPatterns was missing as first arg, causing `onResult` to be undefined. Natural Cover All wins called `_finishProgressiveSpin` never fired → permanent hard lockup.**
-- **Remove custom_card feature (progressive.js): removed `_customCardArmed/Balls/CommandId` state, _checkArmedCommand custom_card query, _subscribeCommands INSERT/UPDATE custom_card branches, `getCustomCardBalls()`, `consumeCustomCard()`, and both exports. Feature was never wired into game.js and was interfering with operator command handling.**
+**Fix 1 — armAndClaim argument order (game.js):**
+`Progressive.armAndClaim(callback)` → `Progressive.armAndClaim(winPatterns, callback)`.
+winPatterns was missing as first arg. onResult was undefined, so the natural
+Cover All jackpot claim callback never fired → permanent game lockup.
 
-- Cache bust: spbm-v597
+**Fix 2 — showJP double-tap double-callback (game.js):**
+Added `_jpDone` guard. Touch devices fire both ontouchend AND onclick on one tap,
+previously calling playNext() twice and launching two parallel Red Spin sequences.
 
-### v5.97 — Hotfix: progressive.js Syntax Error (custom_card removal)
+**Fix 3 — spinReel CSS transition (game.js):**
+Replaced requestAnimationFrame animation loop with CSS transition + transitionend
+event. rAF was throttled/stopped on Samsung Browser, backgrounded tabs, and
+power-saving mode, freezing Red Spin permanently with no animation. CSS transitions
+fire reliably on all browsers (Samsung Internet 4+, Chrome, Firefox, Safari, WebView).
+setTimeout fallback at stopDelay+400ms guarantees onStop always fires.
 
-**ROOT CAUSE:** The regex used to remove consumeCustomCard() left an orphaned
-``);` and `}` after the `claimForce()` function — the .then() chain closing
-of the removed DB update call was not fully matched by the pattern. Node.js
-reported: `SyntaxError: Unexpected token ')'` at line 802. This prevented
-progressive.js from parsing entirely — Progressive was undefined, all DB
-connections failed, game ran in local mode only.
+**Fix 4 — _armRandomTrigger removed (progressive.js):**
+Per-spin probability roll was inserting async force_jackpot rows between spins,
+causing spin 2 to show phantom Cover All card and hang on DB claim. Removed
+entirely — replaced in v5.102 with server-side mystery threshold model.
 
-**Fix:** Removed the two orphan lines between claimForce() and hit().
+**Fix 5 — _checkArmedCommand removed (progressive.js):**
+On every init/refresh, this queried progressive_commands for armed rows,
+picking up stale rows from old testing and causing phantom Cover All on first spin.
 
-- No version bump — same cache string, hotfix only.
+**Fix 6 — custom_card feature removed (progressive.js):**
+Dead feature that was never wired into game.js. Removed all state vars,
+subscriptions, functions, and exports.
 
----
+**Fix 7 — _claimForceWin double-callback guard (progressive.js):**
+Added _onceClaimed wrapper. Safety timer (8s) and DB response could both fire
+onClaimed, causing _finishProgressiveSpin to run twice.
 
-### v5.98 — Bug Fix Audit Pass ($1 Bingo)
-
-**Bug 1 fixed — _armRandomTrigger ghost armed state (progressive.js):**
-Removed the per-spin probability roll block and `_armRandomTrigger()` function
-from `contribute()`. This was inserting async `force_jackpot` rows into
-`progressive_commands` mid-spin, causing `_forceArmed=true` to be set between
-spin 1 and spin 2. Spin 2 then took the Cover All card path and hung waiting
-for a DB claim. The `_forceArmed` flag still works correctly for legitimately
-armed commands via `_subscribeCommands`. This mechanism is fully replaced in
-v5.99 (mystery threshold model).
-
-**Bug 2 fixed — _claimForceWin double-callback (progressive.js):**
-Added `_called` / `_onceOnClaimed` guard to `_claimForceWin`. If the 8-second
-safety timer fires `onClaimed(false)` and the DB response later also calls
-`onClaimed`, the second call is silently discarded. Mirrors the `_armed` guard
-already present in `armAndClaim`.
-
-**Bug 3 fixed — showJP double-tap double-callback (game.js):**
-Added `_dismissed` guard and `_doJPDismiss()` wrapper to `showJP`. On touch
-devices, a single tap fires both `ontouchend` and `onclick`. Without the guard,
-`cb()` (which calls `playNext()`) fired twice, launching two parallel Red Spin
-sequences with shared rsDone state, causing a cascade of extra reel launches.
-
-- Cache bust: spbm-v598
-
----
-
-### v5.99 — Hotfix: Remove _checkArmedCommand ($1 Bingo)
-
-**ROOT CAUSE:** On every init/refresh, `_checkArmedCommand()` queried
-`progressive_commands` for any row with `status='armed'` and `command=
-'force_jackpot'`. Stale armed rows left over from old testing/broken deploys
-caused `_forceArmed=true` before the first spin, sending every fresh game load
-straight into the forced Cover All jackpot path. After refresh the same stale
-row was read again — same phantom Cover All on spin 2.
-
-**Fix:** Removed `_checkArmedCommand()` function and its call site entirely.
-`_forceArmed` is now only set by `_subscribeCommands` INSERT handler (real-time
-new rows while game is running). This means if an operator arms a jackpot before
-the game loads it won't be picked up until v5.100 (mystery threshold redesign
-reads `progressive.armed` column instead of `progressive_commands` rows).
-
-**Also required — one-time DB cleanup (run in Supabase SQL editor):**
-```sql
-UPDATE progressive_commands
-SET status = 'cancelled'
-WHERE status = 'armed' AND command = 'force_jackpot';
-```
-
-- Cache bust: spbm-v599
-
----
-
-### v5.100 — Fix: spinReel rAF Timeout Fallback ($1 Bingo)
-
-**ROOT CAUSE:** `spinReel()` used `requestAnimationFrame` exclusively with no
-timeout fallback. On mobile, rAF is throttled or halted when the screen dims,
-locks, or the browser backgrounds the tab mid-spin. With rAF stopped, `frame()`
-never reached the `snapped` branch, `onStop()` was never called, `_onReelDone`
-never reached 3, and `playNext()` never advanced — causing a permanent frozen
-red screen until the 15-second watchdog fired.
-
-**Fix:** Added `_rafFallback = setTimeout(onStop, stopDelay+500)` immediately
-before `requestAnimationFrame(frame)` in `spinReel()`. When rAF completes
-normally, `_rafDone=true` and `clearTimeout(_rafFallback)` cancel the timer.
-When rAF is throttled or stopped, the fallback fires after `stopDelay+500ms`,
-skips the animation cleanly, and calls `onStop()` — Red Spin always completes.
-
-- Cache bust: spbm-v5100
+- Cache bust: spbm-v5101

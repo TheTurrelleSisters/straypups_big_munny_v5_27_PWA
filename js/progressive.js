@@ -80,8 +80,6 @@ var Progressive = (function () {
   var _onForceNotifyListeners = [];
   var _justWon           = false;
 
-  /* ── Custom Bingo Card Generator state (v5.88, WABC Master) ── */
-
   /* ── Local fallback RNG (mirrors game.js RNG) ── */
   var _rng = (function() {
     var b = new Uint32Array(64); var i = 64;
@@ -335,8 +333,6 @@ var Progressive = (function () {
     });
   }
 
-
-
   /* ═══════════════════════════════════════════════════════════════
      REALTIME
      ═══════════════════════════════════════════════════════════════ */
@@ -359,45 +355,6 @@ var Progressive = (function () {
      eliminated. Ball position is now delivered via WABC Broadcast (wabc.js),
      removing ~2-3 DB writes/second that saturated the CDC replication pool. */
 
-  function _subscribeCommands() {
-    /* Shared channel name — unique per-session channels exhausted the
-       Realtime CDC connection pool (PoolingReplicationPreparationError) */
-    _client.channel('prog-commands')
-      .on('postgres_changes', {
-        event: 'INSERT', schema: 'public', table: 'progressive_commands'
-      }, function (p) {
-        if (!p.new || p.new.status !== 'armed') return;
-        if (p.new.command === 'force_jackpot') {
-          _forceArmed     = true;
-          _forceCommandId = p.new.id;
-          _forceClaimed   = false;
-        }
-      })
-      .on('postgres_changes', {
-        event: 'UPDATE', schema: 'public', table: 'progressive_commands'
-      }, function (p) {
-        if (!p.new) return;
-        if (p.new.command !== 'force_jackpot') return;
-        if (p.new.status === 'won' && p.new.winner_session !== _sessionKey) {
-          _forceArmed     = false;
-          _forceCommandId = null;
-          var _wGameTitle = PROG_GAME_TITLES[p.new.winner_game] || p.new.winner_game || 'another game';
-          var _wWinnerLabel = p.new.winner_label || 'A player';
-          for (var _wi=0; _wi<_onForceNotifyListeners.length; _wi++) {
-            try { _onForceNotifyListeners[_wi](parseFloat(p.new.winner_amt) || 0, _wGameTitle, _wWinnerLabel); } catch(e) {}
-          }
-        }
-        /* Operator cancelled the armed jackpot before anyone claimed it —
-           clear local armed state so this game stops attempting to claim
-           a command that no longer exists. */
-        if (p.new.status === 'cancelled' && p.new.id === _forceCommandId) {
-          _forceArmed     = false;
-          _forceCommandId = null;
-          _forceClaimed   = false;
-        }
-      })
-      .subscribe();
-  }
 
   function _subscribeHits() {
     _client.channel('prog-hits-notify')
@@ -592,17 +549,15 @@ var Progressive = (function () {
       _winPatternsStr = 'Force Jackpot';
     }
 
-    /* v5.98: _called guard prevents double-callback if safety timer fires
-       then DB response arrives later and also calls onClaimed. */
-    var _called = false;
-    function _onceOnClaimed(didWin, amt) {
-      if (_called) return;
-      _called = true;
-      onClaimed(didWin, amt);
+    /* Guard: safety timer and DB response can both call onClaimed.
+       _once wrapper ensures it only fires once. */
+    var _cfwCalled=false;
+    function _onceClaimed(didWin,amt){
+      if(_cfwCalled) return; _cfwCalled=true; onClaimed(didWin,amt);
     }
     var _safetyTimer = setTimeout(function () {
       _forceClaimed = false; _forceArmed = false; _forceCommandId = null;
-      _onceOnClaimed(false);
+      _onceClaimed(false);
     }, 8000);
 
     _client.from('progressive_commands')
@@ -622,7 +577,7 @@ var Progressive = (function () {
              don't keep retrying this dead command every spin. */
           _forceArmed     = false;
           _forceCommandId = null;
-          _onceOnClaimed(false);
+          _onceClaimed(false);
           return;
         }
         /* v5.90: claim succeeded — clear armed state immediately so the
@@ -668,19 +623,19 @@ var Progressive = (function () {
           setTimeout(function () { _justWon = false; }, 5000);
           _localValue = _seed; _notifyValue();
           _forceArmed = false; _forceCommandId = null;
-          _onceOnClaimed(true, hitAmt);
+          _onceClaimed(true, hitAmt);
         }).catch(function () {
           clearTimeout(_safetyTimer);
           _justWon = true;
           setTimeout(function () { _justWon = false; }, 5000);
           _localValue = _seed; _notifyValue();
           _forceArmed = false; _forceCommandId = null;
-          _onceOnClaimed(true, hitAmt);
+          _onceClaimed(true, hitAmt);
         });
       }).catch(function () {
         clearTimeout(_safetyTimer);
         _forceClaimed = false;
-        _onceOnClaimed(false);
+        _onceClaimed(false);
       });
   }
 
@@ -715,7 +670,6 @@ var Progressive = (function () {
           }
           _connected = true;
           _subscribeValue();
-          _subscribeCommands();
           _subscribeHits();
           _subscribePresence();
           /* _subscribeBallCall removed v5.39 — WABC Broadcast handles ball position */

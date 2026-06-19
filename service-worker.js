@@ -1,8 +1,10 @@
-var CACHE = 'spbm-v5105';
+var CACHE = 'spbm-v5121';
 var FILES = [
   './',
   './index.html',
+  './manifest.json',
   './css/styles.css',
+  './js/paytable.js',
   './js/config.js',
   './js/game.js',
   './js/operator.js',
@@ -38,9 +40,7 @@ self.addEventListener('fetch', function(e) {
   var url = e.request.url;
   if (url.indexOf('supabase.co') !== -1) return;
   if (url.indexOf('.js')          !== -1 ||
-      url.indexOf('.html')        !== -1 ||
-      url.indexOf('jsdelivr.net') !== -1 ||
-      url.indexOf('cdn.')         !== -1) {
+      url.indexOf('.html')        !== -1) {
     e.respondWith(
       fetch(e.request)
         .then(function(resp) {

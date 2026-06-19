@@ -1,18 +1,8 @@
 /*
  * progressive.js — Virtual Progressive Controller
  * Stray-Pup LLC / The Turrelle Sisters LLC
- * v1.4 — Server ball call, player registry, offline fallback
+ * v1.5 — Ball call stubs removed (WABC is sole source). Dead code cleanup.
  * ES5 only. No arrow functions. No const/let. No backticks.
- *
- * CHANGES FROM v1.3:
- *   - getBallCall(cb): fetches server ball sequence via RPC,
- *     falls back to local CSPRNG if offline or RPC fails.
- *   - registerPlayer(cb): registers session → Player N in DB,
- *     falls back to local counter if offline.
- *   - refreshBallCall(): called when ball 75 exhausted,
- *     fetches new server sequence or generates locally.
- *   - isOnline(): live connectivity check used throughout.
- *   - All offline fallbacks are seamless — game never stalls.
  */
 
 var SUPABASE_URL      = 'https://gdmmoeggkqsvqnqyrubx.supabase.co';
@@ -73,11 +63,14 @@ var Progressive = (function () {
   var _usingServerBalls  = false; /* true when currently using server sequence */
   var _ballCallListeners = [];    /* callbacks when new sequence arrives */
 
-  /* ── Force jackpot state ── */
+  /* ── Progressive jackpot claim state ── */
+  /* _forceArmed/_forceCommandId/_forceClaimed used by armAndClaim() + _claimForceWin()
+     as a race guard between simultaneous natural Lazy-T hits from multiple players.
+     v5.115: operator-triggered Force Jackpot feature removed — these vars now serve
+     ONLY the natural jackpot race-protection path. */
   var _forceArmed        = false;
   var _forceCommandId    = null;
   var _forceClaimed      = false;
-  var _onForceNotifyListeners = [];
   var _justWon           = false;
 
   /* ── Local fallback RNG (mirrors game.js RNG) ── */
@@ -94,12 +87,6 @@ var Progressive = (function () {
     }
     return { next: next, int: int, shuffle: shuffle };
   }());
-
-  function _localBallShuffle() {
-    var balls = [];
-    for (var i = 1; i <= 75; i++) balls.push(i);
-    return _rng.shuffle(balls);
-  }
 
   /* ── Connectivity check ── */
   function _isOnline() {
@@ -144,35 +131,6 @@ var Progressive = (function () {
     for (var i = 0; i < _connChangeListeners.length; i++) {
       try { _connChangeListeners[i](isOnline); } catch (e) {}
     }
-  }
-
-  /* ═══════════════════════════════════════════════════════════════
-     BALL CALL — SERVER + OFFLINE FALLBACK
-     ═══════════════════════════════════════════════════════════════ */
-
-  /*
-   * getBallCall(cb) — v5.39 WABC migration.
-   * Ball sequences are now owned by the WABC operator and delivered via
-   * Supabase Broadcast through wabc.js. This function returns a local
-   * shuffle immediately; wabc.js will sync the real sequence via WABC.onChange().
-   * cb(sequence, isServer, ballPos) — isServer always false from this path.
-   */
-  function getBallCall(cb) {
-    var local = _localBallShuffle();
-    _usingServerBalls = false;
-    if (cb) cb(local, false, 0);
-  }
-
-  /*
-   * refreshBallCall(cb) — v5.39 WABC migration.
-   * New sequences are now issued by the WABC operator and broadcast via wabc.js.
-   * Returns a local shuffle immediately as placeholder; WABC.onNewCall() will
-   * deliver the real new sequence to all connected players simultaneously.
-   */
-  function refreshBallCall(cb) {
-    var local = _localBallShuffle();
-    _usingServerBalls = false;
-    if (cb) cb(local, false, 0);
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -529,12 +487,10 @@ var Progressive = (function () {
     _forceClaimed = true;
     var hitAmt    = parseFloat(_localValue.toFixed(2));
 
-    /* v5.85: derive the actual pattern(s) achieved + winner label for this
-       hit record. If winPatterns is provided (natural Lazy-T win, passed
-       from armAndClaim), record the real patterns. Otherwise (genuine
-       operator-initiated Force Jackpot via claimForce(), called before
-       winPatterns exists for this spin) keep 'Force Jackpot' — that
-       accurately describes how the hit was triggered. */
+    /* Derive the actual pattern(s) achieved + winner label for this hit record.
+       winPatterns always provided (natural Lazy-T win from armAndClaim).
+       v5.115: operator Force Jackpot removed — fallback 'Force Jackpot'
+       label kept as safety net only, should never fire in normal play. */
     var _winnerLabel = _playerNickname || _playerLabel || _sessionKey;
     var _patternName, _winPatternsStr;
     if (winPatterns && winPatterns.length) {
@@ -549,8 +505,6 @@ var Progressive = (function () {
       _winPatternsStr = 'Force Jackpot';
     }
 
-    /* Guard: safety timer and DB response can both call onClaimed.
-       _once wrapper ensures it only fires once. */
     var _cfwCalled=false;
     function _onceClaimed(didWin,amt){
       if(_cfwCalled) return; _cfwCalled=true; onClaimed(didWin,amt);
@@ -634,7 +588,9 @@ var Progressive = (function () {
         });
       }).catch(function () {
         clearTimeout(_safetyTimer);
-        _forceClaimed = false;
+        _forceClaimed   = false;
+        _forceArmed     = false;
+        _forceCommandId = null;
         _onceClaimed(false);
       });
   }
@@ -704,10 +660,10 @@ var Progressive = (function () {
       _scheduleFlush();
     }
 
-    return _forceArmed;
+    /* v5.115: _forceArmed return removed — contribute() no longer used
+       to trigger Force Jackpot. Kept as no-op return for API compat. */
+    return false;
   }
-
-  function claimForce(onResult) { _claimForceWin(onResult); }
 
   function hit(info, onDone) {
     if (_localMode) {
@@ -778,6 +734,7 @@ var Progressive = (function () {
      BROADCAST MESSAGES (unchanged from v1.3)
      ═══════════════════════════════════════════════════════════════ */
   var _messageListeners  = [];
+  var _onForceNotifyListeners = [];
   var _lastSeenMessageId = 0;
   var _SEEN_KEY          = 'prog_last_msg_' + PROG_GAME_ID;
 
@@ -852,14 +809,12 @@ var Progressive = (function () {
       if (onResult) onResult(true, parseFloat(_localValue.toFixed(2)));
     }, 5000);
 
-    /* v5.88: if a force_jackpot is ALREADY armed (operator's manual Force
-       Jackpot, or the random-trigger mechanism) and not yet claimed, claim
-       THAT existing command instead of inserting a new one. This is what
-       makes operator/random-triggered jackpots converge with this spin's
-       naturally-generated winning card: the trigger only pre-armed a
-       command; THIS spin's Lazy-T (landing because the card was biased via
-       genBiasedBingoCard) claims it once it lands, exactly like any other
-       natural win. */
+    /* Race guard: if another player's natural Lazy-T hit already armed a
+       progressive_commands row before this player's spin completes, claim
+       THAT existing command instead of inserting a duplicate. Prevents two
+       simultaneous natural Lazy-T winners both inserting competing rows.
+       v5.115: operator Force Jackpot removed — this guard is now solely
+       for simultaneous natural-hit race protection. */
     if (_forceArmed && _forceCommandId && !_forceClaimed) {
       _claimForceWin(function(didWin, claimedAmt) {
         clearTimeout(_safetyTimer); _armed = true;
@@ -937,12 +892,9 @@ var Progressive = (function () {
   return {
     init:               init,
     contribute:         contribute,
-    claimForce:         claimForce,
     armAndClaim:        armAndClaim,
     hit:                hit,
     updateLastSpin:     updateLastSpin,
-    getBallCall:        getBallCall,
-    refreshBallCall:    refreshBallCall,
     registerPlayer:     registerPlayer,
     mustHit:            mustHit,
     getDisplay:         getDisplay,

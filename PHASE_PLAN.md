@@ -80,7 +80,7 @@ is PRESERVED — only spinReel changed.
 - Script query strings updated: game.js?v=v5.92, progressive.js?v=v5.92
 
 
-## Current Version: v5.101
+## Current Version: v5.115
 
 ---
 
@@ -195,7 +195,7 @@ Class II bingo PWA. $1 denomination. All wins determined by bingo patterns. Reel
 
 ---
 
-## Current Version: v5.101
+## Current Version: v5.115
 
 ## Pending
 - [ ] Confirm operator tools connect after presence throttle fix
@@ -1147,39 +1147,701 @@ The game would not load past the splash screen on any deployed device.
 
 ---
 
-### v5.101 — Bug Fix + Red Spin Cross-Browser Fix
+### v5.106 — Comprehensive Fix Pass + Permanent Design Rules
 
-**Fix 1 — armAndClaim argument order (game.js):**
-`Progressive.armAndClaim(callback)` → `Progressive.armAndClaim(winPatterns, callback)`.
-winPatterns was missing as first arg. onResult was undefined, so the natural
-Cover All jackpot claim callback never fired → permanent game lockup.
+Built from original uploaded files. All previous patch sessions discarded.
 
-**Fix 2 — showJP double-tap double-callback (game.js):**
-Added `_jpDone` guard. Touch devices fire both ontouchend AND onclick on one tap,
-previously calling playNext() twice and launching two parallel Red Spin sequences.
+**All 14 fixes applied — see GAME_DESIGN_RULES section below for full details.**
 
-**Fix 3 — spinReel CSS transition (game.js):**
-Replaced requestAnimationFrame animation loop with CSS transition + transitionend
-event. rAF was throttled/stopped on Samsung Browser, backgrounded tabs, and
-power-saving mode, freezing Red Spin permanently with no animation. CSS transitions
-fire reliably on all browsers (Samsung Internet 4+, Chrome, Firefox, Safari, WebView).
-setTimeout fallback at stopDelay+400ms guarantees onStop always fires.
+- Cache bust: 'spbm-v5106'
 
-**Fix 4 — _armRandomTrigger removed (progressive.js):**
-Per-spin probability roll was inserting async force_jackpot rows between spins,
-causing spin 2 to show phantom Cover All card and hang on DB claim. Removed
-entirely — replaced in v5.102 with server-side mystery threshold model.
+**NOTE (added v5.112 audit):** the shipped build at the start of this audit
+was v5.111 with no corresponding v5.107–v5.111 entries anywhere in this
+document — those changes (whatever they were) went out without being
+logged, breaking Rule 5 (read/update PHASE_PLAN before AND after every
+build). Flagging this gap since the missing-brace regression below was
+not caught by any documented review in that range.
 
-**Fix 5 — _checkArmedCommand removed (progressive.js):**
-On every init/refresh, this queried progressive_commands for armed rows,
-picking up stale rows from old testing and causing phantom Cover All on first spin.
+---
 
-**Fix 6 — custom_card feature removed (progressive.js):**
-Dead feature that was never wired into game.js. Removed all state vars,
-subscriptions, functions, and exports.
+### v5.112 — CRITICAL: Red Spin Permanent Lockup Fixed (runRS misplaced setTimeout)
 
-**Fix 7 — _claimForceWin double-callback guard (progressive.js):**
-Added _onceClaimed wrapper. Safety timer (8s) and DB response could both fire
-onClaimed, causing _finishProgressiveSpin to run twice.
+**ROOT CAUSE:** Inside `runRS()` (js/game.js), the `setTimeout(playNext,200)`
+call meant to kick off the Red Spin sequence exactly once was sitting on
+the wrong side of `playNext`'s own closing brace, trapping it INSIDE
+`playNext`'s body:
 
-- Cache bust: spbm-v5101
+```
+    function _onReelDone(){ ... }
+  }                          // closed _onReelDone (correct)
+  setTimeout(playNext,200);  // BUG: still inside playNext
+}                             // closed playNext
+}                             // closed runRS
+```
+
+Total brace count was balanced, so `node --check` never flagged this —
+it's a structural placement bug, not a syntax error. Confirmed via a
+brace-depth trace, not just inspection.
+
+**SYMPTOM:** every call to `playNext()` re-scheduled itself again 200ms
+later, regardless of whether the current pattern's reel animation
+(500–1450ms `RS_STOP` delays) had actually finished. Since `runRS` only
+ever runs when `rsPatterns.length>0` (2+ bingo patterns won on the same
+spin — single-pattern wins never call `runRS` at all), this only ever
+surfaced on multi-pattern Red Spin wins, matching the reported bug
+exactly. The rogue timer raced `seqIdx` past `rsPatterns.length`,
+`pat = rsPatterns[seqIdx]` became `undefined`, and the next `pat.*`
+property access threw inside an uncaught async callback. `onDone()` never
+ran, so `S.spinning` / `setCtrl(false)` (set at the top of `doSpin`) were
+never reverted — permanent lockup, all controls dead, no recovery.
+
+**FIX:** moved the closing `}` for `playNext` to immediately follow
+`_onReelDone`'s closing brace, then placed `setTimeout(playNext,200)`
+after it, at `runRS`'s own scope — so it now fires exactly once per
+`runRS()` call, as originally intended.
+
+**ALSO IN THIS BUILD:** Section 5 (RED SPIN RULES) corrected — it
+previously said patterns play "ascending by pay," but the actual
+`doSpin`/`doBingoSpin` code explicitly orders by ball-completion order
+(with a code comment stating "DO NOT sort by pay — that breaks the
+design"). The two usually coincide because lower-pay patterns are
+configured with higher `balls` thresholds, but completion order is what
+the code actually keys off. Section 5 wording updated to match the real
+implementation; the flow/behavior itself was NOT changed.
+
+**Verified:** `node --check` clean on all JS files; brace-depth trace
+confirms `setTimeout(playNext,200)` now executes at `runRS`'s scope, not
+`playNext`'s.
+
+**NOT done in this build (flagged, not applied):** root-level
+`progressive.js` (outside `js/`) is stale — still contains
+`_subscribeCommands`/`_checkArmedCommand`/force-jackpot code this document
+says was removed in v5.99+. `index.html` loads from `js/progressive.js`
+exclusively, so this is dead weight rather than live, but it violates the
+"root copies must stay in sync" rule. Left untouched pending separate
+confirmation, since rewriting it is a larger change than the lockup fix.
+
+- Cache bust: spbm-v5112
+
+---
+
+### v5.113 — Dead File Removal + Audit Findings (not yet fixed)
+
+**Removed (confirmed unreferenced anywhere, exhaustively grep-checked
+against every .html/.js/.css/.json file before deletion):**
+- Root-level `progressive.js` (44K) — stale duplicate of `js/progressive.js`,
+  not loaded by index.html or service-worker.js, still contained
+  `_subscribeCommands`/`_checkArmedCommand`/force-jackpot code this document
+  says was removed in v5.99+. Flagged in v5.112, deleted now.
+- Root-level `credits_addup.wav`, `red_spin_music.mp3`, `ring1.mp3`,
+  `scott_full.png`, `splash.jpg` — orphaned duplicates of files in
+  `assets/`. Every actual reference (index.html, service-worker.js FILES
+  list, paytable.js `asset:` field) uses the `assets/` path exclusively.
+  ~1.6MB removed.
+- Root-level `icon-192.png`, `icon-512.png` — zero references found
+  anywhere (manifest.json and service-worker.js both use
+  `assets/icons/icon-192x192.png` / `icon-512x512.png`). ~556KB removed.
+
+**NOT removed:** root-level `bingo_pattern_mapper.html` — Section 11
+explicitly documents this duplicate as intentional ("Same as assets
+version"). Left in place.
+
+**New issues found during this audit — documented here, NOT yet fixed,
+pending confirmation:**
+
+1. **`_scheduleResync()` (js/game.js) can never succeed.** After a WABC
+   disconnect, this sets a 10s `setInterval` that calls
+   `Progressive.getBallCall(cb)` and only clears itself / adopts the
+   sequence `if(isServer)`. But `getBallCall()` (js/progressive.js) is a
+   v5.39-era stub that unconditionally calls `cb(local, false, 0)` —
+   `isServer` is hardcoded `false`, by its own doc comment. This means
+   `_scheduleResync`'s interval can NEVER clear itself and NEVER adopts a
+   real sequence through this path — it just discards a throwaway local
+   shuffle every 10 seconds, forever, once triggered. Actual resync
+   appears to happen separately via wabc.js's own reconnect + `WABC.onChange()`
+   path, making this interval pure dead weight that also never stops
+   running once started.
+
+2. **`_claimForceWin`'s outer `.catch()` (js/progressive.js ~line 633)
+   doesn't fully reset state.** Every other failure path resets
+   `_forceClaimed`, `_forceArmed`, AND `_forceCommandId` together. This
+   one only resets `_forceClaimed`, leaving `_forceArmed`/`_forceCommandId`
+   stuck if the `.update()` call itself throws/rejects (vs. returning a
+   normal response with 0 rows matched). Since `contribute()` returns
+   `_forceArmed` directly and that value drives the forced-jackpot branch
+   in `doSpin()`, a stuck `_forceArmed=true` would route every subsequent
+   spin through the force-claim path until it either re-succeeds or hits
+   the 0-rows-matched branch naturally. Narrow window (requires the update
+   request itself to fail, not just return no match) but the asymmetry
+   with the other four reset sites looks like an oversight.
+
+3. **Stale comments describing removed features as currently active.**
+   `armAndClaim()`'s v5.88 comment block still reads "if a force_jackpot
+   is ALREADY armed (operator's manual Force Jackpot, or the
+   random-trigger mechanism)..." — both of those triggering mechanisms
+   are gone (no operator.js button, no `_armRandomTrigger`,
+   no `_subscribeCommands`/`_checkArmedCommand` in the live file). The
+   `_forceArmed` check itself is still legitimate (it now only protects
+   against a race between two players' simultaneous natural Lazy-T wins),
+   but the comment describes a scenario that can no longer happen and
+   should be reworded to avoid misleading whoever edits this next.
+
+4. **broadcast-init.js holds open a permanent no-op Realtime channel.**
+   `subscribeSystemCommands()` subscribes to `progressive_commands` INSERT
+   events on a `game-sys-commands` channel every page load, but
+   `handleSystemCommand()` is a documented no-op (`return false;`) per the
+   v5.80 fix. Functionally harmless today, but it's an extra open
+   Realtime channel per player session doing nothing, on a project with
+   a documented history of Realtime connection-pool exhaustion (v5.59)
+   and duplicate-channel bugs (v5.52). Worth removing the subscription
+   entirely rather than leaving an always-on no-op listener.
+
+- Cache bust: spbm-v5113
+
+---
+
+### v5.114 — Red Spin Ascending-Pay Sort Fixed + Permanent Design Rule Locked
+
+**BUG:** Red Spin was awarding patterns highest-to-lowest pay instead of
+lowest-to-highest. Root cause: `rsPatterns` was built as `winPatterns.slice(1)`,
+which preserves ball-completion order. Because high-paying patterns have low
+`balls` thresholds (e.g. Corporal Stripes: balls:27, pay:$800) they complete
+FIRST in `doBingoSpin`'s ball-by-ball loop, landing at the front of `winPatterns`.
+After `basePat` takes `winPatterns[0]`, the remaining `rsPatterns` were still
+high-to-low — the opposite of the intended excitement build.
+
+**FIX:** Added `.sort(function(a,b){return a.pay[S.cpl-1]-b.pay[S.cpl-1];})` to
+`rsPatterns` after the filter, sorting ascending by pay at the current bet level.
+`basePat` (main reels) is unaffected — it remains `winPatterns[0]`, the first
+pattern to complete (highest pay in normal configurations, correct behavior).
+Red Spin now plays lowest→highest, building to the biggest win last.
+
+**PERMANENT DESIGN RULE:** This ascending-pay sort for Red Spin is the ONLY
+valid mechanism. Never change the sort direction, remove the sort, or revert
+to completion order without explicit written confirmation from the owner.
+See Section 5 (RED SPIN RULES) for the authoritative design spec.
+
+Applied identically to all 3 games in the same build.
+
+**Verified:** `node --check` clean on all three js/game.js files.
+
+- Cache bust: spbm-v5114
+
+---
+
+### v5.115 — Cover All Redesign + Pattern Sort Fix + Dead Code Removal
+
+**CHANGE 1 — Bug Fix: Pattern Award Order (lowest→highest, basePat included)**
+Root cause: `doBingoSpin()` returns `winPatterns` in ball-completion order. High-paying
+patterns have lower `balls` thresholds and complete first, landing at `[0]`. `basePat`
+was therefore always the highest payer, shown on main reels BEFORE Red Spin ran.
+
+Fix: `_reelPats` sorted ascending by `pay[S.cpl-1]` BEFORE `winPatterns` is reassembled.
+`winPatterns[0]` (basePat) is now always the lowest-paying reel-bearing pattern.
+Red Spin (`rsPatterns`) ascending sort preserved. Stale "DO NOT sort by pay" comments removed.
+`_sideAwards` concept removed — Cover All 40 handled as event, not side award.
+
+**CHANGE 2 — Cover All 40 Redesign (owner-confirmed rule)**
+
+Confirmed flow:
+1. Player presses Spin → card generated and daubed
+2. Cover All + any additional patterns within ball threshold determined
+3. Ball sequence end sent to DB (→ new WABC sequence for all players)
+4. $0.01 credited to winning player + local toast
+5. "GAME END — Cover All Achieved" broadcast to all connected players via `broadcast_messages`
+6. Reels land on lowest reel-bearing winning pattern (or non-winning combo if Cover All alone)
+7. Red Spin plays any additional reel-bearing patterns lowest→highest
+8. Cover All itself NEVER appears as a Red Spin entry — it is the trigger/event only
+
+Key code changes:
+- `_handleCoverAll()`: `hasPenny` parameter removed. Responsibilities: stop caller,
+  set exhausted, request new sequence, call `_broadcastCoverAll()`.
+- `_broadcastCoverAll()`: new function. Credits $0.01, shows local toast, inserts into
+  `broadcast_messages` (`type:'general'`, `created_by: playerNickname||'player'`).
+- Cover All 40 excluded from `winPatterns` reel sequence (event-only, not reel slot).
+- Cover All 40 excluded from `rsPatterns` filter by name check.
+- `baseAmt` accumulation loop cleaned up — uses `p.reel` truthy check, no name guards.
+- Cover All 75 concept fully removed from all code and comments.
+
+**CHANGE 3 — Bug Fix: Blank Bingo Card on First/Early Spins**
+Root cause: `exitDemo()` called `buildBingoCardNodes()` unconditionally, doing
+`grid.innerHTML=''` every time — wiping card DOM nodes built at init, causing a
+blank-card flash before `doBingoSpin()`/`renderBingoCard()` repopulated them.
+Fix: `exitDemo()` now only rebuilds nodes if `_cardNodes === null || length < 25`.
+
+**CHANGE 4 — Dead Code Removal**
+
+`js/game.js` removed:
+- `_forceJP` / `Progressive.contribute()` / Force Jackpot `if` block in `doSpin()`
+- `generateCoverAllSpin()` function (≈85 lines)
+- `refreshServerBallCall()` function (never called)
+- `_scheduleResync()` + `_resyncTimer` (stub always returned isServer=false, interval never cleared)
+- `checkPatterns()` function (zero call sites)
+- All stale comments referencing Force Jackpot, Cover All 75, "DO NOT sort by pay"
+
+`js/progressive.js` removed:
+- `claimForce()` function + API entry
+- `_onForceNotifyListeners` array + `onForceNotify()` function + API entry
+- Rewrote `armAndClaim()` race-guard comment (now correctly describes simultaneous natural-hit protection)
+- Rewrote `_claimForceWin()` comment (removed operator Force Jackpot references)
+- `_forceArmed`/`_forceCommandId`/`_forceClaimed`/`_claimForceWin()` KEPT — used by `armAndClaim()` for natural jackpot race protection
+
+`broadcast-init.js` removed:
+- `subscribeSystemCommands()` — permanent no-op Realtime channel (wasted connection slot)
+- `handleSystemCommand()` — always returned false
+- `Progressive.onForceNotify()` handler — listener was never fired
+- Version bumped: v1.2 → v1.3
+
+**CHANGE 5 — paytable.js**
+- Note 5 (Cover All 75) removed, notes renumbered
+- Cover All 40 BINGO_PATTERNS comment updated to describe v5.115 behaviour
+
+**Known deferred bug (NOT fixed in this build):**
+When a new WABC ball sequence arrives mid-celebration via `WABC.onNewCall()`, the winning
+card is re-daubed with the new sequence, overwriting the win highlight. The winning card
+must remain frozen in its win state until the player presses Spin again.
+Flagged for a future version.
+
+- Cache bust: spbm-v5115
+
+---
+
+### v5.116 — Hotfix: Restore Accidentally Deleted Functions from v5.115
+
+**Root cause:** The v5.115 dead-code removal pass deleted three functions from `game.js`
+and the `onForceNotify` infrastructure from `progressive.js` that were NOT dead.
+
+**Bug 1 — Blank bingo cards + `ReferenceError: stopPatternCycle is not defined`**
+`checkPatterns()`, `startPatternCycle()`, and `stopPatternCycle()` were removed from
+`game.js` under the assumption `checkPatterns()` had zero call sites. However
+`startPatternCycle()` and `stopPatternCycle()` are called from 10+ locations in `game.js`
+and are solely responsible for rendering bingo card patterns after every spin result.
+Without them the game threw a ReferenceError on the first spin and all bingo cards
+appeared blank.
+
+Fix: All three functions restored to `game.js` at their original position (after the
+ball-track clear block, before GAME STATE).
+
+**Bug 2 — `TypeError: Progressive.onForceNotify is not a function`**
+`onForceNotify()`, `_onForceNotifyListeners` array, and the public API export were removed
+from `progressive.js`, but `index.html` line 209 still calls
+`Progressive.onForceNotify(showAttitudeCheck)` on every page load, throwing a TypeError
+on startup.
+
+Fix: `_onForceNotifyListeners` array, `onForceNotify()` function, and its return-object
+entry restored to `progressive.js`.
+
+**Bug 3 — `showBroadcastToast` missing title arg (minor)**
+`broadcast-init.js` v1.3 dropped the `msg.title` second argument from the toast call.
+The function signature still accepts it. Restored `msg.title || ''` as second arg.
+
+Files changed: `js/game.js`, `js/progressive.js`, `broadcast-init.js`
+- Cache bust: spbm-v5116
+
+---
+
+### v5.121 — Server-Driven Ball Caller (wabc-ball-ticker Edge Function)
+
+**Files changed:** `js/game.js`, `index.html`, `service-worker.js`, `PHASE_PLAN.md`
+**New files:** `supabase/advance_ball_call.sql`, `supabase/wabc_tick_loop.sql`,
+              `supabase/functions/wabc-ball-ticker/index.ts`
+
+**Architecture change — ball position is now server-driven:**
+
+Previously each game client ran its own `_activeCallNext` timer independently,
+meaning every player was on a different ball in the sequence. This is now fixed.
+
+The wabc-ball-ticker Edge Function runs every 2 seconds (via pg_cron looping),
+increments ball_pos in the DB, and broadcasts 'pos' events to ALL connected
+game clients simultaneously via Supabase Realtime. All players see the same
+ball at the same time.
+
+**Ball caller pauses when no players are connected:**
+advance_ball_call() checks player_registry.last_seen within 60 seconds before
+doing anything. If no active players, returns 'idle' and no broadcast is sent.
+Ball calling resumes automatically when the next player connects and their
+last_seen is updated.
+
+**Known limitation — 60-second stutter:**
+pg_cron minimum interval is 1 minute. wabc_tick_loop() runs 30 iterations
+of 2-second sleeps within each minute window. There is a brief gap
+(~milliseconds) at the 60-second boundary between job runs.
+If players notice this, the fix is to use cron-job.org to call the
+wabc-ball-ticker Edge Function directly every 2 seconds (no pg_cron needed).
+See deployment instructions below.
+
+**game.js changes:**
+- startActiveCaller()/stopActiveCaller() simplified to boolean flag only
+  (BG.entTimer = true/false) — no longer set timers
+- _activeCallNext() removed — server drives position
+- WABC.onChange() wired to _onServerBallPos() which handles daubing,
+  rendering, and Cover All 75 detection
+- setPosProvider() and onSyncResponse() removed — server is position authority
+- _requestNewWABCSequence() kept for Cover All events only
+
+**Deployment (Supabase Dashboard — no CLI needed):**
+See step-by-step instructions in the game zip at:
+  supabase/DEPLOYMENT_INSTRUCTIONS.md
+
+**Fallback plan (if 60s stutter is unacceptable):**
+Use cron-job.org (free) to POST to your Edge Function URL every 2 seconds.
+URL: https://{project}.supabase.co/functions/v1/wabc-ball-ticker
+Header: Authorization: Bearer {anon_key}
+Schedule: Every 2 seconds (cron-job.org supports this)
+Then delete the pg_cron job: SELECT cron.unschedule('wabc-ball-ticker');
+
+- Cache bust: spbm-v5121
+
+---
+
+### v5.120 — Cover All 75 Restored, Showcase + Ball Caller Speed Tuning
+
+**Files changed:** `js/game.js`, `index.html`, `service-worker.js`, `PHASE_PLAN.md`
+
+**Changes:**
+
+1. **Cover All 75 restored** — All 25 cells covered within balls 41-75 now awards $0.01 penny + toast ('Cover All — 75 Balls!') + new sequence request. Identical behavior to Cover All 40. Guards: only fires if Cover All 40 did NOT already fire this sequence (`BG._coverAll75Fired` flag + `BG.awaitingNewSeq` check). `_coverAll75Fired` resets to false when new sequence arrives via `onNewCall` and `onBallCallUpdate`. Detection uses `Object.keys(BG.matchedCells).length===25` inside `_activeCallNext` — safe here (no prior-spin contamination in entertainment phase). `_broadcastCoverAll()` updated to accept a `msg` parameter so both Cover All 40 and 75 show distinct toast messages.
+
+2. **Pattern showcase speed** — 2500ms → fixed 1600ms per pattern.
+
+3. **Active ball caller speed** — randomized 3200–3500ms → fixed 1800ms per ball.
+
+- Cache bust: spbm-v5120
+
+---
+
+### v5.119 — Dead Code Removal, Bug Fixes, Hot Dog Pattern, Schema Cleanup
+
+**Files changed:** `js/game.js`, `js/progressive.js`, `js/paytable.js`, `js/config.js`, `broadcast-init.js`, `index.html`, `service-worker.js`, `PHASE_PLAN.md`
+
+**Bug fixes:**
+1. **Cover All false-positive** — `BG._coverAll1to40` set via `matchedCells.length===25` included entertainment balls from prior spin. Replaced with authoritative `wonPatterns` loop using `isCoverAll` flag. Multiple Cover All triggers eliminated.
+2. **Ball sequence never restarted after Cover All** — Added `BG.awaitingNewSeq` flag. `_handleCoverAll` sets it, `WABC.onNewCall` and `Progressive.onBallCallUpdate` clear it. `doSpin` blocks with toast until cleared.
+3. **Pattern showcase wipe on load** — `sizeLayout()` nulled `_cardNodes` then rebuilt 100ms later, wiping active showcase render. Corporal Stripes (idx 0) and Pyramid (idx 2) always blank. Fixed: removed `_cardNodes=null`, added `_showNextPattern()` re-render after rebuild during idle.
+4. **`_claimForceWin` outer `.catch()` incomplete reset** — only reset `_forceClaimed`, leaving `_forceArmed` and `_forceCommandId` stuck. Fixed: all three force state vars reset.
+
+**Dead code removed (game.js):** `genBallCall()`, `startSilentCaller()`, `stopSilentCaller()`, `_silentTimer`, `startEntertainmentBalls()`, `stopEntertainmentBalls()`, `checkPatterns()`, `enterDemo()`, `exitDemo()`, `checkDemoTrigger()`, `onForceLocal` handler, BALL CALLER LIFECYCLE comment block, `GS.state='demo'`, all 8 dual idle/demo guards, `Progressive.updateBallPos()` per-tick call, `DENOM` -> `PROG_DENOM` (6 locations).
+
+**Dead code removed (progressive.js):** `getBallCall()`, `refreshBallCall()`, `_localBallShuffle()`, removed from public API.
+
+**New pattern:** Hot Dog added — `spjpch:[0,7,4]`, cells `[6,7,8,10,11,12,13,14,16,17,18]`, balls 39, pay `[40,80,120]`.
+
+**Other:** `stopPatternShowcase()` clears card on stop. 3 inline watchdog IIFEs -> `_clearSpinWatchdog()`. Duplicate `Progressive.onMessage` in `broadcast-init.js` removed. Eruda removed. `paytable.js` and `manifest.json` added to SW cache. `config.js` stale sections removed.
+
+**PHASE_PLAN:** Section 6 Hot Dog added. Section 7 `spjpch` added. Section 8 updated (local caller removed, active guard, Cover All 75 removed).
+
+- Cache bust: spbm-v5119
+
+---
+
+### v5.117 — Fix: Stealth/Idle Pattern Showcase Labels
+
+1. **Lazy-T (isProgressive)** showed `★ WIDE AREA PROGRESSIVE ★ — Cover All in 25 Balls`
+   - Wrong on two counts: Lazy-T is NOT a Cover All (only 9 specific cells, not all 25), and
+     the ★ WIDE AREA PROGRESSIVE ★ label conflated it with Cover All rules.
+   - Fixed: now shows `LAZY-T — In 25 Balls | PROGRESSIVE POT` matching the same
+     name/balls/award format as all other patterns. Gold color (#ffd700) retained.
+
+2. **Cover All 40 (reel:null)** fell through to the generic `$pay[0]/$pay[1]/$pay[2]` branch
+   which would display `$0.01/$0.01/$0.01` — correct but unformatted.
+   - Fixed: dedicated `!pat.reel` branch formats penny as `$0.01` via `.toFixed(2)`.
+
+**Clarification confirmed:** The showcase is a pure visual demo loop cycling all
+`BINGO_PATTERNS[]` entries with dummy cells — zero game outcome. Each pattern shows its
+name, ball threshold, and award amount exactly as the player would win it. Lazy-T's award
+is the Progressive Pot (not a dollar figure), Cover All 40 awards a penny.
+
+File changed: `js/game.js` (`_showNextPattern` label block only)
+- Cache bust: spbm-v5117
+
+---
+
+# PERMANENT GAME DESIGN RULES
+
+**ALL future engineers MUST read before making ANY changes.**
+
+# ============================================================
+# STRAYPUPS BIG MUNNY — PERMANENT GAME DESIGN RULES
+# ============================================================
+# 
+# ⚠️  MANDATORY: Every engineer and developer MUST read this
+#     document before making ANY changes to the game code.
+#     These rules are LAW. Breaking them breaks the game.
+# ============================================================
+
+## 1. GAME TYPE
+Class II Bingo game. The slot reels are ENTERTAINMENT ONLY.
+All wins are determined by bingo outcomes, not reel outcomes.
+The bingo evaluation runs FIRST. The reel result is then FORCED
+to match the winning bingo pattern's assigned symbol combination.
+On a no-win spin, the reels show a non-win combination that does
+NOT visually look like a win.
+
+---
+
+## 2. SYMBOL TABLE
+
+| ID | Symbol            | Type    | File/Render           |
+|----|-------------------|---------|-----------------------|
+| 0  | Stray Pup (SP)    | WILD    | scott_full.png        |
+| 1  | Seven (7)         | Normal  | SVG inline            |
+| 2  | Triple Bar (3B)   | Normal  | SVG inline            |
+| 3  | Double Bar (2B)   | Normal  | SVG inline            |
+| 4  | Single Bar (1B)   | Normal  | SVG inline            |
+| 5  | Cherry (CHR)      | Normal  | SVG inline            |
+| 6  | Blank             | Non-win | Empty slot (dark tape)|
+| 7  | Progressive JP    | WILD    | progressive_jackpot.png|
+
+### Wild Symbol Rules (SP and Progressive JP):
+- **1 Wild**: Doubles the winning combination pay
+- **2 Wilds**: Pays 4× the winning combination
+- **3 Wilds (SP+SP+SP)**: Jackpot — Corporal Stripes pattern
+- SP and Progressive JP are INTERCHANGEABLE wilds
+- Any mix of SP and JP counts (e.g. SP+JP+Seven qualifies as 2-wild Seven)
+- 3× Progressive JP exclusively = Lazy-T Progressive Jackpot
+- Wilds NEVER appear on the payline during a no-win spin
+
+### Blank Symbol Rules:
+- Blank appears ONLY in Cherry-based wins and non-win stops
+- Blank NEVER appears with Bar or Seven winning combinations
+- Example valid combos: Cherry+Blank+Blank (Open Diamond), Blank+Cherry+Bar (Open Diamond)
+- Example invalid: Seven+Blank+Seven (impossible — Blanks never with Sevens)
+
+---
+
+## 3. CHERRY WIN HIERARCHY (ascending pay)
+
+| Pattern       | Qualifying Payline Combo              | Wilds |
+|---------------|---------------------------------------|-------|
+| Open Diamond  | 1 Cherry + any non-wild (incl. Blank) | None  |
+| EII           | 2 Cherries + any non-wild (incl. Blank)| None |
+| Baby Buggy    | 3 Cherries                            | None  |
+| Hopscotch     | 1 Wild + 1 Cherry + any              | 1     |
+| Make Cents    | 1 Wild + 2 Cherries                  | 1     |
+| Poodle Dog    | 2 Wilds + 1 Cherry                   | 2     |
+
+---
+
+## 4. BAR/SEVEN WIN HIERARCHY
+
+Bars and Sevens NEVER have Blank positions. All 3 reels must show
+a non-blank symbol for any Bar or Seven combination to pay.
+
+### Seven Patterns (descending wild count):
+| Pattern          | Combo                    | Pay Tier |
+|------------------|--------------------------|----------|
+| Corporal Stripes | 3× Wild (any combo)       | JACKPOT  |
+| Cross Corners    | 2× Wild + Seven          | High     |
+| Pyramid          | 1× Wild + 2× Seven       | High     |
+| Double Cross     | 3× Seven                 | High     |
+
+### Triple Bar Patterns:
+| Pattern   | Combo                    | Pay Tier |
+|-----------|--------------------------|----------|
+| The Kite  | 2× Wild + Triple Bar     | High     |
+| Arrowhead | 1× Wild + 2× Triple Bar  | High     |
+| G Flat    | 3× Triple Bar            | Mid      |
+
+### Double Bar Patterns:
+| Pattern          | Combo                    | Pay Tier |
+|------------------|--------------------------|----------|
+| Four Leaf Clover | 2× Wild + Double Bar     | High     |
+| Valentine        | 1× Wild + 2× Double Bar  | Mid      |
+| Christmas Tree   | 3× Double Bar            | Mid      |
+
+### Single Bar Patterns:
+| Pattern         | Combo                   | Pay Tier |
+|-----------------|-------------------------|----------|
+| Private Stripes | 2× Wild + Single Bar    | Mid      |
+|                 | OR 3× Single Bar        | Mid      |
+| Tee             | 1× Wild + 2× Single Bar | Mid      |
+
+### Mixed Bar Patterns:
+| Pattern      | Combo                              | Pay Tier |
+|--------------|------------------------------------|----------|
+| Stepladder   | 1× Wild + Triple Bar + Double Bar  | Mid      |
+| Small Diamond| Triple Bar + Double Bar + Single Bar| Low     |
+
+---
+
+## 5. RED SPIN RULES (PERMANENT — NEVER CHANGE WITHOUT OWNER CONFIRMATION)
+
+> ⚠️  **OWNER-CONFIRMED PERMANENT DESIGN (v5.115):**
+> All winning reel-bearing patterns sorted **ascending by pay** (lowest first, highest last).
+> `basePat` (main reels) = lowest-paying reel-bearing pattern.
+> `rsPatterns` (Red Spin) = remaining patterns, also lowest→highest.
+> Both use the same ascending `pay[S.cpl-1]` sort applied to `_reelPats` in `doSpin`.
+> **Never change sort direction, remove sort, or revert to ball-completion order
+> without explicit written confirmation from the owner.**
+
+**Red Spin triggers when the player wins 2 or more reel-bearing patterns on the same spin.**
+Cover All 40 alone does NOT trigger Red Spin. Cover All 40 + other patterns DOES trigger Red Spin
+(the other patterns play via Red Spin; Cover All is the event/trigger, not a Red Spin entry).
+
+**v5.115 — Authoritative flow:**
+1. All reel-bearing patterns sorted ascending by `pay[S.cpl-1]`
+2. `basePat = winPatterns[0]` = lowest-paying reel-bearing pattern → drives main reel visual
+3. Screen turns RED (if 2+ reel-bearing patterns)
+4. Red Spin plays remaining reel-bearing patterns in ascending pay order:
+   - Reels spin and land on that pattern's symbol combo
+   - Bingo card highlights that pattern's cells
+   - Win amount added to Bonus Total
+5. Red Spin ends → ALL won patterns cycle in a loop until player presses Spin
+
+**Single reel-bearing pattern** = no Red Spin. Main reels show combo, win displays, game unlocks.
+**Cover All 40 only** = no Red Spin. Reels land on non-winning combo. $0.01 credited.
+  "GAME END — Cover All Achieved" broadcast to all connected players via `broadcast_messages`.
+  New WABC ball sequence issued to all players.
+**Cover All 40 + other patterns** = Cover All event fires (penny + broadcast + new sequence).
+  Main reels show lowest reel-bearing pattern. Red Spin plays remaining patterns ascending.
+  Cover All 40 does NOT appear as a Red Spin entry.
+**Progressive (Lazy-T) win** = main reels show 3× Progressive JP, straight to jackpot celebration.
+
+---
+
+## 6. BINGO PATTERN DEFINITIONS
+
+Cell index map (5×5 grid, row-major, 0=top-left):
+```
+  B   I   N   G   O
+  0   1   2   3   4   ← row 1
+  5   6   7   8   9   ← row 2
+ 10  11  12  13  14   ← row 3  (12 = FREE SPACE, always daubed)
+ 15  16  17  18  19   ← row 4
+ 20  21  22  23  24   ← row 5
+```
+
+| Pattern           | Balls | Pay (1/2/3)      | Reel Key | Cells                                     |
+|-------------------|-------|------------------|----------|-------------------------------------------|
+| Corporal Stripes  | 27    | 800/1600/2500    | jp       | 2,6,7,8,10,11,12,13,14,15,19             |
+| Cross Corners     | 29    | 320/640/960      | 7w4      | 0,4,7,11,12,13,17,20,24                  |
+| Pyramid           | 29    | 160/320/480      | 7w2      | 12,16,17,18,20,21,22,23,24               |
+| The Kite          | 35    | 160/320/480      | 3bw4     | 0,1,2,5,6,7,10,11,12,18,24               |
+| Double Cross      | 28    | 80/160/240       | 7        | 2,6,7,8,12,16,17,18,22                   |
+| Arrowhead         | 30    | 80/160/240       | 3bw2     | 2,6,7,8,10,12,14,17,22                   |
+| G Flat            | 36    | 40/80/120        | 3b       | 2,3,4,7,12,15,16,17,20,21,22             |
+| Make Cents        | 29    | 40/80/120        | spchch   | 2,6,7,8,11,12,16,17,18,22                |
+| Four Leaf Clover  | 34    | 100/200/300      | 2bw4     | 1,5,6,7,11,12,13,17,18,19,23             |
+| Valentine         | 37    | 50/100/150       | 2bw2     | 4,6,8,10,12,14,16,18,20,22               |
+| Tee               | 38    | 20/40/60         | 1bw2     | 0,1,2,3,4,7,12,17,22                     |
+| Poodle Dog        | 35    | 20/40/60         | spspch   | 0,1,6,11,12,13,14,16,18,21,23            |
+| Christmas Tree    | 38    | 25/50/75         | 2b       | 2,6,7,8,10,11,12,13,14,17,22             |
+| Private Stripes   | 30    | 12/24/36         | 1b       | 2,6,8,10,12,14                           |
+| Stepladder        | 36    | 10/20/30         | spmb     | 4,7,8,12,15,16,20                        |
+| Hopscotch         | 38    | 10/20/30         | spch     | 1,3,7,11,12,13,17,21,23                  |
+| Baby Buggy        | 35    | 10/20/30         | ch3      | 3,4,8,10,11,12,13,15,16,17,18,21,23      |
+| Small Diamond     | 38    | 5/10/15          | mb       | 7,11,12,13,17                            |
+| EII               | 38    | 4/8/12           | ch2      | 0,5,10,15,20,21,22,23,24                 |
+| Open Diamond      | 38    | 2/4/6            | ch1      | 2,10,12,14,22                            |
+| Hot Dog           | 39    | 40/80/120        | spjpch   | 6,7,8,10,11,12,13,14,16,17,18            |
+| Lazy-T            | 25    | Progressive Pot  | coverall | 4,9,10,11,12,13,14,19,24                 |
+| Cover All 40      | 40    | $0.01 (penny)    | null     | All 25 cells — trigger/event only, not Red Spin entry |
+
+**Notes:**
+- Cell 12 (free space) is always daubed. It's included in pattern cells for
+  visual correctness but is SKIPPED in win evaluation (never blocks a win).
+- Lazy-T = O column (4,9,14,19,24) + middle row (10,11,12,13,14) = 9 unique cells
+- Cover All 40: penny + DB sequence reset signal. NO reel association.
+- Cover All 75: natural end. Nothing happens. Ball caller runs to 75.
+
+---
+
+## 7. REEL KEY DEFINITIONS (REEL_SYMS)
+
+The reel key is the QUALIFYING minimum combination. The actual reel
+strip shuffles equivalent combinations each spin for variety.
+
+| Key      | Symbols [R1,R2,R3] | Description              |
+|----------|--------------------|--------------------------|
+| jp       | [0,0,0]            | SP + SP + SP (Jackpot)   |
+| 7w4      | [0,0,1]            | SP + SP + Seven          |
+| 7w2      | [0,1,1]            | SP + Seven + Seven       |
+| 7        | [1,1,1]            | Seven + Seven + Seven    |
+| 3bw4     | [0,0,2]            | SP + SP + Triple Bar     |
+| 3bw2     | [0,2,2]            | SP + Triple + Triple     |
+| 3b       | [2,2,2]            | Triple + Triple + Triple |
+| 2bw4     | [0,0,3]            | SP + SP + Double Bar     |
+| 2bw2     | [0,3,3]            | SP + Double + Double     |
+| 2b       | [3,3,3]            | Double + Double + Double |
+| 1bw4     | [0,0,4]            | SP + SP + Single Bar     |
+| 1bw2     | [0,4,4]            | SP + Single + Single     |
+| 1b       | [4,4,4]            | Single + Single + Single |
+| mb       | [2,3,4]            | Triple + Double + Single |
+| spmb     | [0,2,3]            | SP + Triple + Double     |
+| spch     | [0,5,4]            | SP + Cherry + Single     |
+| ch3      | [5,5,5]            | Cherry + Cherry + Cherry |
+| ch2      | [5,5,4]            | Cherry + Cherry + Single |
+| ch1      | [5,4,3]            | Cherry + Single + Double |
+| spspch   | [0,0,5]            | SP + SP + Cherry         |
+| spchch   | [0,5,5]            | SP + Cherry + Cherry     |
+| coverall | [7,7,7]            | JP + JP + JP (Lazy-T)    |
+| spjpch   | [0,7,4]            | SP + JP + Single Bar (Hot Dog) |
+| none     | [4,2,3]            | No-win (1B+3B+2B)        |
+
+---
+
+## 8. BALL CALLER RULES
+
+- **WABC (Wide Area Ball Caller)**: Sole source of ball sequences. Shared across all games.
+  All players see the same 75-ball sequence simultaneously.
+  Local ball caller fallback has been permanently removed (v5.118).
+- **ballPos 0-39**: Pre-called zone. Evaluated for bingo patterns on spin.
+- **ballPos 40-75**: Entertainment zone. Balls called every 3.2-3.5s.
+  No bingo evaluation — display only.
+- **Cover All 40**: All 25 cells covered within balls 1-40 → penny + new sequence.
+- **Ball 75**: Sequence exhausted naturally. WABC Master generates next sequence.
+
+### Ghost Card Prevention:
+- During idle state, NEVER render actual ball-matched cells on the bingo card.
+- The showcase pattern highlight owns the card display during idle.
+- `GS.state === 'active'` guard MUST wrap all
+  `renderBingoCard(BG.card, BG.matchedCells, null)` calls in:
+  - `_activeCallNext()`
+  - `onBallCallUpdate()` handler
+  - Any other handler that fires during idle
+
+---
+
+## 9. PROGRESSIVE JACKPOT RULES
+
+- Pattern: **Lazy-T** (O column + middle row, 9 cells, ≤24 called balls)
+- Class II compliant: bingo-determined, not RNG-determined
+- Reel: 3× Progressive JP symbol (progressive_jackpot.png)
+- When Lazy-T wins: main reels show coverall (7-7-7), straight to jackpot
+- Sub-patterns that co-win are paid silently — no separate reel stops
+- Must-hit-by ceiling: server-side threshold in `progressive` table
+- `progressive_commands` force_jackpot mechanism: REMOVED (v5.99+)
+- `_armRandomTrigger`: REMOVED (v5.99+)
+- `_checkArmedCommand`: REMOVED (v5.99+)
+- `_subscribeCommands`: REMOVED (v5.99+)
+
+---
+
+## 10. CODE RULES (ENFORCED)
+
+1. **Cache bust every build**: Update title, splash-ver, ALL ?v= query strings,
+   and service-worker.js CACHE string. All must match. Verify with grep.
+2. **node --check before packaging**: Run syntax check on ALL modified JS files.
+3. **Folder names in zips**: v1/ for $1 game, v5d/ for $5 game, maxine/ for Maxine.
+4. **Multi-repo awareness**: Check if fixes apply across all 3 games.
+5. **PHASE_PLAN.md**: Read and update before AND after every build.
+6. **Clarify before building**: Explain changes, wait for explicit confirmation.
+7. **No custom_card**: Feature permanently removed. Never re-add.
+8. **No force_jackpot commands**: Operator force jackpot permanently removed.
+9. **No _armRandomTrigger**: Client-side random trigger permanently removed.
+10. **Red Spin design is FINAL**: Never change the Red Spin flow defined in Section 5.
+
+---
+
+## 11. TOOLS (in /assets/ folder of each game repo)
+
+- `bingo_pattern_mapper.html` (v5): Original pattern mapper
+- `bingo_pattern_mapper_v6.html` (v6): Updated with Progressive JP symbol,
+  visual reel icons, Cherry/Bar/Seven hierarchy. Use v6 for all future mapping.
+- `bingo_pattern_mapper.html` in root: Same as assets version.
+
+**These tools are REFERENCE DOCUMENTS. Any pattern or reel assignment
+changes MUST be validated in the mapper tool first, output shared for
+approval, then applied to config.js. Never change reel assignments
+or pattern cells without going through this process.**
+

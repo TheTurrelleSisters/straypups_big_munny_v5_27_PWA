@@ -2047,3 +2047,396 @@ changes MUST be validated in the mapper tool first, output shared for
 approval, then applied to config.js. Never change reel assignments
 or pattern cells without going through this process.**
 
+
+---
+
+## ✅ CONFIRMED STABLE BASELINE — v5.130
+
+**Confirmed working as of this audit session (June 2026):**
+
+| Item | Status |
+|------|--------|
+| WABC from Supabase — live ball sequence shared across all players | ✅ Confirmed |
+| Balls 41-75 animate correctly after Cover All (v5.130 fix) | ✅ Confirmed |
+| Cover All lockup resolved — self-broadcast echo never freezes triggering player | ✅ Confirmed |
+| Ball strip empty on game load — only fills after first Spin | ✅ Confirmed |
+| `node --check` clean on all JS files | ✅ Confirmed |
+| All version strings consistent: CACHE, title, splash-ver, ?v= query strings | ✅ Confirmed |
+| Service worker cache correct — no missing files that break atomic install | ✅ Confirmed |
+| ES5 throughout — no arrow functions, const, let, backticks, async/await | ✅ Confirmed |
+| `contribute()` restored (v5.122) — pot grows on every spin | ✅ Confirmed |
+| Heartbeat active — ball caller stays live while game is open | ✅ Confirmed |
+| Red Spin ascending-pay sort — lowest→highest (v5.114, owner-confirmed permanent) | ✅ Confirmed |
+| `broadcast-init.js` v1.4 — no dead channels, no no-op subscriptions | ✅ Confirmed |
+
+**SQL Schema confirmed (Supabase `gdmmoeggkqsvqnqyrubx.supabase.co`):**
+Tables: `progressive`, `progressive_hits`, `progressive_commands`, `broadcast_messages`, `ball_call`, `player_registry`, `game_history`
+RPCs: `progressive_contribute`, `progressive_hit`, `register_player`, `touch_player_last_seen`, `upsert_ball_call`
+
+---
+
+## VERSION GAP NOTE — v5.118 and v5.123
+
+v5.118 is referenced in v5.119 ("local caller fallback permanently removed") but has no phase plan entry.
+v5.123 is referenced as the version that resolved all outstanding issues after an out-of-process engineer made undocumented changes between v5.107–v5.111.
+Both gaps are attributed to an engineer not following phase plan rules.
+**Rule reinforced: NO build ships without a complete phase plan entry. This is non-negotiable.**
+
+---
+
+## DEFERRED ITEM — wabc.js sync handshake code
+
+`wabc.js` still contains `setPosProvider()`, `onSyncResponse()`, and `sync_request`/`sync_response` broadcast handlers (lines ~183-211, 291-310). These were used by the old client-driven ball-caller sync architecture (pre-v5.121). Since v5.121 the server drives ball position exclusively.
+
+**Reason not removed yet:** These methods may be consumed by an operator tool (WABC Master or Floor Manager) that uses `wabc.js` as a shared module. Must audit all operator tool repos before removing.
+
+**Action:** When next updating operator tools, grep all tool repos for `setPosProvider` / `onSyncResponse` / `sync_request` / `sync_response`. If zero references found, remove from `wabc.js` in the same build.
+
+---
+
+## DEFERRED ITEM — `scott_full.png` missing from SW FILES cache
+
+`assets/scott_full.png` (the SP Wild mascot, 103KB) is present on disk and referenced in `index.html` and `paytable.js` but is **not listed in the service worker FILES cache**. This means it will not load for offline players.
+
+**Action:** Add `'./assets/scott_full.png'` to the FILES array in `service-worker.js`. Include in next cache-busting build.
+
+---
+
+## ARCHITECTURE FINDING — Progressive Jackpot Trigger Flow (WRONG — must fix in v6.0)
+
+**Confirmed gap between intended design and live code:**
+
+### Intended Design (Real Class II Progressive Controller)
+1. Pot grows each spin via `progressive_contribute` RPC
+2. When `value >= ceiling`, the **DB/controller arms the jackpot** by inserting a `progressive_commands` row
+3. All game clients silently receive the armed command via Realtime and set internal armed state
+4. Jackpot sits armed — waiting for a natural Lazy-T bingo outcome
+5. When Lazy-T occurs (armed or not), the game reports the win to the DB/controller
+6. If armed: full pot paid, pot resets to seed
+7. If NOT armed (Lazy-T hit below ceiling): pot value still paid, pot resets — DB/controller notified
+
+### Current Live Code (Wrong)
+- `_subscribeCommands` — **REMOVED** (no listener for DB-armed commands)
+- `_checkArmedCommand` — **REMOVED** (no startup check for pre-existing armed command)
+- `armAndClaim()` — **game inserts its own `progressive_commands` row** and immediately claims it in the same call
+- Result: game is simultaneously acting as both the controller AND the player client — bypasses the real controller pattern entirely
+- `mustHit()` correctly detects `value >= ceiling` but **nobody calls it** — it is completely unused
+- `trigger_odds` column exists in DB and is fetched/tracked but `_armRandomTrigger` was removed — column is dead
+
+**This will be fully redesigned in v6.0. See build plan below.**
+
+---
+
+## v6.0 — Progressive Controller Redesign + Housekeeping
+
+### Version: 6.0
+### Cache bust: `spbm-v600`
+### Applies to: ALL THREE GAMES simultaneously ($1, $5, Maxine)
+
+---
+
+### WHAT THIS BUILD FIXES
+
+#### Primary: Progressive Jackpot — Correct Class II Controller Architecture
+
+The jackpot trigger is moved out of the game client and into the DB/controller where it belongs. The game client becomes a pure receiver-and-reporter.
+
+#### Secondary: Housekeeping
+
+- `force_jackpot` command string → `lazy_t_claim` throughout
+- Stale `'Force Jackpot'` fallback label → `'Lazy-T'`
+- `contribute()` stale comment rewritten
+- `armAndClaim()` comment rewritten (no longer self-inserts)
+- `scott_full.png` added to SW cache
+- All version strings bumped to `6.0`
+
+---
+
+### DETAILED BUILD PLAN
+
+---
+
+#### PART 1 — DB CHANGES (run in Supabase SQL Editor BEFORE deploying game code)
+
+##### 1A — New Postgres trigger: `progressive_arm_on_ceiling`
+
+This is the "controller." The moment `progressive.value` crosses `progressive.ceiling`, the DB automatically arms the jackpot — no client, no cron, no Edge Function involved.
+
+```sql
+-- 1. Function: inserts armed command if none already armed
+CREATE OR REPLACE FUNCTION public.progressive_arm_jackpot()
+RETURNS TRIGGER LANGUAGE plpgsql SECURITY DEFINER AS $$
+BEGIN
+  -- Only fire when value crosses ceiling (was below, now at or above)
+  IF NEW.value >= NEW.ceiling AND OLD.value < NEW.ceiling THEN
+    -- Guard: don't insert if one is already armed (prevents duplicates on rapid contributions)
+    IF NOT EXISTS (
+      SELECT 1 FROM progressive_commands
+      WHERE command = 'lazy_t_claim' AND status = 'armed'
+    ) THEN
+      INSERT INTO progressive_commands (command, status, created_by)
+      VALUES ('lazy_t_claim', 'armed', 'progressive_controller');
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+GRANT EXECUTE ON FUNCTION public.progressive_arm_jackpot() TO anon, authenticated;
+
+-- 2. Trigger on progressive table UPDATE
+DROP TRIGGER IF EXISTS progressive_arm_on_ceiling ON public.progressive;
+CREATE TRIGGER progressive_arm_on_ceiling
+  AFTER UPDATE OF value ON public.progressive
+  FOR EACH ROW EXECUTE FUNCTION public.progressive_arm_jackpot();
+```
+
+##### 1B — Rename existing `force_jackpot` command values in DB
+
+```sql
+-- Clean up any historical rows with old command name
+UPDATE progressive_commands
+SET command = 'lazy_t_claim'
+WHERE command = 'force_jackpot';
+```
+
+##### 1C — Verify `progressive_contribute` RPC still exists and works
+No change needed — this RPC already updates `progressive.value` via UPDATE, which will now fire the new trigger automatically.
+
+---
+
+#### PART 2 — `js/progressive.js` CHANGES
+
+##### 2A — Restore `_subscribeCommands()`
+
+Re-add a Realtime listener on `progressive_commands` INSERT events. When a new `lazy_t_claim / armed` row appears, the game client sets its internal armed state.
+
+```javascript
+function _subscribeCommands() {
+  _client.channel('prog-commands')
+    .on('postgres_changes', {
+      event: 'INSERT', schema: 'public', table: 'progressive_commands',
+      filter: "command=eq.lazy_t_claim"
+    }, function(p) {
+      if (!p.new) return;
+      if (p.new.status !== 'armed') return;
+      // Another client may have already claimed it — only arm if not already claimed
+      if (_forceClaimed) return;
+      _forceCommandId = p.new.id;
+      _forceArmed     = true;
+      _forceClaimed   = false;
+      console.log('[Progressive] Jackpot armed by controller — command id:', _forceCommandId);
+      _notifyArmed(true);  // NEW: notify game UI that jackpot is armed
+    })
+    .on('postgres_changes', {
+      event: 'UPDATE', schema: 'public', table: 'progressive_commands',
+      filter: "command=eq.lazy_t_claim"
+    }, function(p) {
+      if (!p.new) return;
+      // If the row we're holding was won or cancelled by someone else — clear state
+      if ((p.new.status === 'won' || p.new.status === 'cancelled') &&
+          _forceCommandId === p.new.id) {
+        if (!_forceClaimed) {  // we didn't win it
+          _forceArmed     = false;
+          _forceCommandId = null;
+          _notifyArmed(false);
+        }
+      }
+    })
+    .subscribe();
+}
+```
+
+##### 2B — Restore `_checkArmedCommand()` (startup check)
+
+On init, after `_fetchRow`, check if a `lazy_t_claim / armed` row already exists (controller armed it before this player connected).
+
+```javascript
+function _checkArmedCommand() {
+  if (!_client) return;
+  _client.from('progressive_commands')
+    .select('*')
+    .eq('command', 'lazy_t_claim')
+    .eq('status', 'armed')
+    .limit(1)
+    .then(function(res) {
+      if (res.error || !res.data || !res.data.length) return;
+      _forceCommandId = res.data[0].id;
+      _forceArmed     = true;
+      _forceClaimed   = false;
+      console.log('[Progressive] Jackpot already armed on connect — command id:', _forceCommandId);
+      _notifyArmed(true);
+    });
+}
+```
+
+##### 2C — Rewrite `armAndClaim()` — no longer self-inserts
+
+`armAndClaim()` is now called by the game when Lazy-T is detected. It no longer inserts its own command row. Two cases:
+
+- **Armed (controller pre-armed):** claim the existing row via `_claimForceWin()`
+- **Not armed (Lazy-T hit below ceiling):** report directly — insert a `lazy_t_claim / won` row immediately (no armed intermediate state needed), pay the pot, reset
+
+```javascript
+function armAndClaim(winPatterns, onResult) {
+  // ... local/offline fallback unchanged ...
+
+  if (_forceArmed && _forceCommandId && !_forceClaimed) {
+    // Controller had armed the jackpot — claim that pre-armed row
+    _claimForceWin(function(didWin, claimedAmt) {
+      _notifyArmed(false);
+      if (onResult) onResult(didWin, didWin ? claimedAmt : parseFloat(_seed.toFixed(2)));
+    }, winPatterns);
+    return;
+  }
+
+  // Lazy-T hit but jackpot was NOT armed by controller (pot below ceiling)
+  // Report the natural hit directly — pot still pays current value
+  var hitAmt = parseFloat(_localValue.toFixed(2));
+  _client.from('progressive_commands').insert({
+    command:     'lazy_t_claim',
+    status:      'won',          // goes straight to won — no armed intermediate
+    winner_game: PROG_GAME_ID,
+    winner_amt:  hitAmt,
+    winner_session: _sessionKey,
+    winner_label: _playerNickname || _playerLabel || _sessionKey,
+    won_at:      new Date().toISOString(),
+    created_by:  'natural_hit_below_ceiling'
+  }).select().then(function(res) {
+    if (res.error) {
+      console.warn('[Progressive] natural hit insert error:', res.error.message);
+    }
+    // Pay regardless of insert success — player won fair and square
+    _client.rpc('progressive_hit', { reset_to: _seed }).then(function(rpcRes) {
+      if (rpcRes && rpcRes.error) {
+        console.warn('[Progressive] progressive_hit RPC FAILED:', rpcRes.error.message);
+      }
+      _localValue = _seed; _notifyValue();
+      _forceArmed = false; _forceCommandId = null;
+      if (onResult) onResult(true, hitAmt);
+    }).catch(function() {
+      _localValue = _seed; _notifyValue();
+      if (onResult) onResult(true, hitAmt);
+    });
+  }).catch(function(err) {
+    console.warn('[Progressive] natural hit catch:', err);
+    _localValue = _seed; _notifyValue();
+    if (onResult) onResult(true, hitAmt);
+  });
+}
+```
+
+##### 2D — Add `_notifyArmed()` + `onArmed()` public API
+
+Lets the game UI react to jackpot armed state (e.g. future "jackpot is hot" indicator).
+
+```javascript
+var _armedListeners = [];
+function _notifyArmed(isArmed) {
+  _armedListeners.forEach(function(fn) { try { fn(isArmed); } catch(e){} });
+}
+function onArmed(fn) { _armedListeners.push(fn); }
+// Add onArmed to public API exports
+```
+
+##### 2E — Fix stale strings and comments
+
+- `_claimForceWin` fallback label: `'Force Jackpot'` → `'Lazy-T'` (both occurrences, lines 540-541)
+- `contribute()` comment lines 699-700: rewrite to "contribute() grows the pot. When value crosses ceiling, the DB trigger arms a lazy_t_claim command. This function no longer triggers the jackpot directly."
+- `armAndClaim()` comment block: rewrite to describe new "receive armed command, claim it OR report natural hit below ceiling" design
+- `_claimForceWin` section header comment: remove "FORCE WIN CLAIM" → "JACKPOT CLAIM"
+- Any remaining "Force Jackpot" string → "Lazy-T"
+
+##### 2F — Wire `_subscribeCommands` + `_checkArmedCommand` into `init()`
+
+```javascript
+// Inside init(), after _fetchRow callback, alongside _subscribeValue():
+_subscribeCommands();
+_checkArmedCommand();
+```
+
+---
+
+#### PART 3 — `js/game.js` CHANGES
+
+##### 3A — Remove the stale `_progPat._forceAmt` path in `_continueSpinAfterClaim`
+
+The comment on line 1385 says `"Force win — amount confirmed by DB claim"` with a `_progPat._forceAmt` reference. This was the old operator-forced jackpot path. Since `armAndClaim()` now handles both armed and unarmed cases with a unified callback, the game's Lazy-T win path simplifies to a single call regardless:
+
+```javascript
+// BEFORE (two paths):
+if (_progPat._forceAmt) {
+  _finishProgressiveSpin(_progPat._forceAmt + _allPatsBonus, ...);
+} else {
+  Progressive.armAndClaim(winPatterns, function(didWin, _progAmt) {
+    _finishProgressiveSpin(_progAmt + _allPatsBonus, ...);
+  });
+}
+
+// AFTER (one path — armAndClaim handles both armed and unarmed):
+Progressive.armAndClaim(winPatterns, function(didWin, _progAmt) {
+  _finishProgressiveSpin(_progAmt + _allPatsBonus, winPatterns,
+                          basePat, _spinCardSerial, _spinBalBefore);
+});
+```
+
+##### 3B — Clean stale comments referencing Force Jackpot path in game.js
+Lines 572-573, 1435-1436, 1437, 1472 — rewrite to reflect current design.
+
+---
+
+#### PART 4 — `service-worker.js` CHANGES
+
+- Add `'./assets/scott_full.png'` to FILES array
+- Bump CACHE to `'spbm-v600'`
+
+---
+
+#### PART 5 — VERSION BUMP (ALL FILES)
+
+| File | Change |
+|------|--------|
+| `service-worker.js` | `CACHE = 'spbm-v600'` |
+| `index.html` | `<title>StrayPups Big Munny v6.0</title>` |
+| `index.html` | `#splash-ver` → `v6.0` |
+| `index.html` | All `?v=` query strings → `?v=6.0` |
+| `manifest.json` | `?v=6.0` if present |
+
+---
+
+#### PART 6 — APPLY TO $5 GAME AND MAXINE
+
+All changes in Parts 1-5 apply identically to:
+- `straypups_big_munny_5d` (`v5d/`) — PROG_GAME_ID `'straypups_5d'`, DENOM `5.00`
+- `maxine/` — PROG_GAME_ID `'maxine'`, DENOM `2.00`
+
+The DB changes (Part 1) are shared — the `progressive` table, trigger, and `progressive_commands` table are wide-area, one set of SQL runs once.
+
+Game-specific differences to verify per repo:
+- PROG_GAME_ID and PROG_DENOM in `index.html` inline script
+- Cache bust string: `spbm-v600` ($1/$5), `maxine-v600` (Maxine)
+- Title/splash-ver per game name
+
+---
+
+#### PART 7 — VERIFICATION CHECKLIST (post-deploy)
+
+- [ ] Postgres trigger exists: `SELECT tgname FROM pg_trigger WHERE tgname='progressive_arm_on_ceiling';`
+- [ ] Manually update `progressive.value` to exceed `progressive.ceiling` in SQL Editor — confirm a `lazy_t_claim / armed` row appears in `progressive_commands`
+- [ ] Open game, open F12 console — confirm `[Progressive] Jackpot already armed on connect` log if a pre-armed row exists
+- [ ] With jackpot armed: trigger a Lazy-T spin — confirm `progressive_commands` row updates to `status='won'`, `progressive_hits` row inserted, pot resets to seed in UI
+- [ ] Without jackpot armed: trigger a Lazy-T spin — confirm `progressive_commands` row inserted directly as `status='won'` with `created_by='natural_hit_below_ceiling'`, pot pays and resets
+- [ ] Confirm `scott_full.png` loads offline (kill network, reload, check SP Wild symbol renders)
+- [ ] `node --check` clean on all modified JS files
+- [ ] All three games verified simultaneously
+
+---
+
+### BUILD RULES REMINDER FOR v6.0
+
+1. Read this plan fully before writing a single line of code
+2. Run `node --check` on every modified JS file before packaging
+3. Run the SQL (Part 1) in Supabase BEFORE deploying game code
+4. Verify trigger fired correctly in Supabase before testing games
+5. Package all three games in one zip delivery
+6. Update this phase plan after delivery with confirmed results
+

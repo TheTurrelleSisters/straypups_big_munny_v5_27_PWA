@@ -796,13 +796,25 @@ var Progressive = (function () {
   }
   function _checkUnreadMessages() {
     _loadLastSeen();
+    /* Only replay messages from the last 30 minutes — prevents players
+       who were offline for hours/days from receiving a backlog of stale
+       Cover All or system notifications that are no longer relevant.
+       Cover All events no longer insert into broadcast_messages (v6.0),
+       but this age guard protects against any historical rows and future
+       message types that should not replay on login. */
+    var _cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     _client.from('broadcast_messages').select('*')
       .gt('id', _lastSeenMessageId)
+      .gt('created_at', _cutoff)
       .not('type', 'in', '("force_local_ball","restore_wide_ball")')
       .order('id', { ascending: true })
       .then(function(res) {
         if (res.error || !res.data || !res.data.length) return;
-        res.data.forEach(function(msg, i) {
+        /* Cap replay at 3 messages max — never flood a newly-connecting
+           player with a long queue of banners regardless of how many
+           legitimate messages accumulated while they were away. */
+        var _msgs = res.data.slice(0, 3);
+        _msgs.forEach(function(msg, i) {
           setTimeout(function() { _notifyMessage(msg); }, i * 4000);
         });
       });

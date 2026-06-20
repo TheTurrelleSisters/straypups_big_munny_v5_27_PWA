@@ -448,28 +448,44 @@ function stopPatternShowcase(){
 }
 function _showNextPattern(){
   if(GS.state!=='idle') return;
-  var pat=BINGO_PATTERNS[_showcaseIdx%BINGO_PATTERNS.length];
-  _showcaseIdx++;
   var nameEl=document.getElementById('bingo-pattern-name');
+  /* Brief blank frame between patterns — clears card and name for 250ms
+     before the next pattern renders. Eliminates the glitch/flash caused
+     by simultaneous cell transitions firing on the previous pattern's
+     highlighted cells. Gives a clean, consistent rhythm at one speed. */
   nameEl.style.color='#f5d878';
-  // Empty white cells — no numbers shown during idle showcase
-  var dummyCells=[];
-  for(var i=0;i<25;i++) dummyCells.push(i===12?null:0); // 0 = empty, null = free space
-  var patMatched={12:true};
-  for(var ci=0;ci<pat.cells.length;ci++) patMatched[pat.cells[ci]]=true;
-  renderBingoCard(dummyCells,patMatched,pat.cells);
-  // Set name after renderBingoCard so it's the final text shown
-  if(pat.isProgressive){
-    // Lazy-T: show name + threshold + "Progressive Pot" (pay:[0,0,0] — pot awarded separately)
-    nameEl.textContent=pat.name.toUpperCase()+' — In '+pat.balls+' Balls | PROGRESSIVE POT';
-    nameEl.style.color='#ffd700';
-  } else if(!pat.reel){
-    // Cover All 40: no reel stop — show name, balls, and penny award
-    nameEl.textContent=pat.name.toUpperCase()+' — In '+pat.balls+' Balls | $'+pat.pay[0].toFixed(2);
-  } else {
-    nameEl.textContent=pat.name.toUpperCase()+' — In '+pat.balls+' Balls | $'+pat.pay[0]+'/$'+pat.pay[1]+'/$'+pat.pay[2];
+  nameEl.textContent='\u00a0';
+  if(_cardNodes&&_cardNodes.length===25){
+    for(var _bi=0;_bi<25;_bi++){
+      _cardNodes[_bi].className='bc'+(_bi===12?' free':'');
+      _cardNodes[_bi].textContent=_bi===12?'*':'';
+    }
   }
-  _showcaseTimer=setTimeout(_showNextPattern,3500);
+  _showcaseTimer=setTimeout(function(){
+    if(GS.state!=='idle') return;
+    var pat=BINGO_PATTERNS[_showcaseIdx%BINGO_PATTERNS.length];
+    _showcaseIdx++;
+    /* Set name FIRST — text and card change together in the same frame */
+    if(pat.isProgressive){
+      nameEl.textContent=pat.name.toUpperCase()+' \u2014 In '+pat.balls+' Balls | PROGRESSIVE POT';
+      nameEl.style.color='#ffd700';
+    } else if(!pat.reel){
+      nameEl.textContent=pat.name.toUpperCase()+' \u2014 In '+pat.balls+' Balls | $'+pat.pay[0].toFixed(2);
+      nameEl.style.color='#f5d878';
+    } else {
+      nameEl.textContent=pat.name.toUpperCase()+' \u2014 In '+pat.balls+' Balls | $'+pat.pay[0]+'/$'+pat.pay[1]+'/$'+pat.pay[2];
+      nameEl.style.color='#f5d878';
+    }
+    /* Render card highlight after name is set */
+    var dummyCells=[];
+    for(var i=0;i<25;i++) dummyCells.push(i===12?null:0);
+    var patMatched={12:true};
+    for(var ci=0;ci<pat.cells.length;ci++) patMatched[pat.cells[ci]]=true;
+    renderBingoCard(dummyCells,patMatched,pat.cells);
+    /* Fixed 5000ms dwell — same for every pattern, enough time to read
+       name, ball threshold, and pay at any complexity. No variable speeds. */
+    _showcaseTimer=setTimeout(_showNextPattern,5000);
+  },250); /* 250ms blank gap between patterns */
 }
 
 /* -- ENTERTAINMENT PHASE STATE --
@@ -548,23 +564,19 @@ function _handleCoverAll75(){
   _broadcastCoverAll('Cover All — 75 Balls!');
 }
 
-/* _broadcastCoverAll — credits $0.01, shows local toast, broadcasts to all players.
+/* _broadcastCoverAll — credits $0.01 and shows local toast to the winning player only.
    msg: display string e.g. 'Cover All — 40 Balls!' or 'Cover All — 75 Balls!'
-   No-op in local mode or when DB unavailable. */
+   IMPORTANT: Cover All is a sequence/system event, NOT a player-facing announcement.
+   The $0.01 award and toast are LOCAL ONLY — only the player whose spin triggered
+   Cover All receives the penny and sees the toast. Other players learn about the new
+   sequence via WABC (upsert_ball_call broadcast), not through broadcast_messages.
+   No insert into broadcast_messages — prevents:
+     (a) idle/non-spinning players receiving a misleading "Cover All" win banner
+     (b) startup message spam when _checkUnreadMessages replays accumulated rows */
 function _broadcastCoverAll(msg){
-  var _msg = msg || 'GAME END — Cover All Achieved';
+  var _msg = msg || 'Cover All Achieved!';
   toast(_msg);
   S.bal+=0.01;updUI();
-  if(!BG.usingServerBalls||!window._floorSupabaseClient) return;
-  window._floorSupabaseClient.from('broadcast_messages').insert({
-    message:_msg,
-    type:'general',
-    created_by:window._playerNickname||'player'
-  }).then(function(res){
-    if(res.error) console.warn('[CoverAll] broadcast insert error:',res.error.message);
-  }).catch(function(err){
-    console.warn('[CoverAll] broadcast insert catch:',err);
-  });
 }
 
 
@@ -1167,11 +1179,10 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
     _refreshSpinWatchdog();
     console.log('[RedSpin] Pattern: '+pat.name+', reel: '+pat.reel);
     badge.textContent='RED SPIN '+seqIdx;
-    /* Show this pattern's name + highlight its cells on the bingo card
-       while its reel animation plays. */
+    /* Clear pattern name and card highlight BEFORE reels spin —
+       player sees no answer until the 3rd reel lands. */
     var _pnEl=document.getElementById('bingo-pattern-name');
-    if(_pnEl) _pnEl.textContent=pat.name.toUpperCase();
-    renderBingoCard(BG.card,BG.matchedCells,pat.cells);
+    if(_pnEl) _pnEl.textContent='\u00a0';
     var reelSyms=REEL_SYMS[pat.reel]||REEL_SYMS['none'];
     var sr=forcedSpinResult(reelSyms);
     sndBonusSpin();
@@ -1183,6 +1194,10 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
       rsDone++;
       console.log('[RedSpin] _onReelDone called, rsDone='+rsDone);
       if(rsDone<3) return; /* wait for all 3 reels to finish */
+      /* Reveal pattern name + card highlight NOW — exactly as 3rd reel lands.
+         Player sees the result at the moment of stop, not before the spin. */
+      if(_pnEl) _pnEl.textContent=pat.name.toUpperCase();
+      renderBingoCard(BG.card,BG.matchedCells,pat.cells);
       console.log('[RedSpin] All 3 reels done, firing 120ms callback');
       setTimeout(function(){
       var payAmt=pat.pay[cpl-1];

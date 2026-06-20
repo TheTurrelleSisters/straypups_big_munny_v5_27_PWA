@@ -1440,6 +1440,42 @@ Files changed: `js/game.js`, `js/progressive.js`, `broadcast-init.js`
 
 ---
 
+### v5.122 — Heartbeat, Contribution Fix, WABC Reconnect Guard
+
+**Files changed:** `js/game.js`, `js/progressive.js`, `wabc.js`, `index.html`, `service-worker.js`
+
+**Bug fixes:**
+
+1. **Ball caller pausing between spins** — `advance_ball_call()` was returning
+   `idle` because `player_registry.last_seen` was only updated on spin press
+   (throttled to 30s). Added a 20-second heartbeat (`_startHeartbeat`) in
+   `progressive.js` that calls `touch_player_last_seen` every 20 seconds
+   independently of spin activity. Starts immediately after player registers.
+   Stops on page unload. Ball caller now stays active as long as game is open.
+
+2. **Progressive pot not growing** — `Progressive.contribute()` was removed
+   in v5.115 alongside Force Jackpot but should never have been removed.
+   `contribute()` is what feeds the pot percentage from every bet. Restored
+   at spin time in `doSpin()`.
+
+3. **DB restart allowed play with stale sequence** — when DB restarted, WABC
+   reconnected but `BG.callSeq` kept the old sequence with no guarantee it
+   matched the current DB state. Two fixes: (a) `doBingoSpin()` now blocks
+   spin if `WABC.getSequence()` returns empty/invalid; (b) `wabc.js` now
+   calls `_fetchInitial()` on every SUBSCRIBED event (reconnect) to re-sync
+   the sequence and ball_pos from DB.
+
+**Also:** Stale null-nickname sessions in `player_registry` — run this SQL to clean up:
+```sql
+DELETE FROM player_registry
+WHERE nickname IS NULL
+AND last_seen < now() - interval '2 hours';
+```
+
+- Cache bust: spbm-v5122
+
+---
+
 ### v5.121 — Server-Driven Ball Caller (wabc-ball-ticker Edge Function)
 
 **Files changed:** `js/game.js`, `index.html`, `service-worker.js`, `PHASE_PLAN.md`

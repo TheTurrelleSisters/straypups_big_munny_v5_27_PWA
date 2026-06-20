@@ -164,6 +164,7 @@ var Progressive = (function () {
       _playerNum       = _localPlayerCounter++;
       _playerLabel     = 'Player ' + _playerNum;
       _playerRegistered = true;
+      _startHeartbeat();
       console.warn('[Progressive] registerPlayer offline — assigned ' + _playerLabel + ' locally');
       if (cb) cb(_playerNum, _playerLabel);
       return;
@@ -177,6 +178,7 @@ var Progressive = (function () {
       _playerLabel     = 'Player ' + _playerNum + ' (local)';
       _playerRegistered = true;
       _cbFired = true;
+      _startHeartbeat();
       console.warn('[Progressive] registerPlayer timeout — using local label');
       if (cb) cb(_playerNum, _playerLabel);
     }, 4000);
@@ -199,6 +201,7 @@ var Progressive = (function () {
       }
       _playerRegistered = true;
       _cbFired = true;
+      _startHeartbeat();
       if (cb) cb(_playerNum, _playerLabel);
     }).catch(function (err) {
       clearTimeout(_timer);
@@ -208,6 +211,7 @@ var Progressive = (function () {
       _playerLabel     = 'Player ' + _playerNum + ' (local)';
       _playerRegistered = true;
       _cbFired = true;
+      _startHeartbeat();
       if (cb) cb(_playerNum, _playerLabel);
     });
   }
@@ -221,6 +225,9 @@ var Progressive = (function () {
   var _lastSpinTrackTime = 0;
   var _lastSpinTime      = null;
   var _TRACK_THROTTLE_MS = 30000; /* Only broadcast presence every 30s max */
+  var _heartbeatTimer    = null;
+  var _HEARTBEAT_MS      = 20000; /* Touch last_seen every 20s — keeps ball
+                                     caller active between spins */
 
   function updateLastSpin() {
     if (!_playerRegistered) return;
@@ -258,6 +265,34 @@ var Progressive = (function () {
           console.warn('[Progressive] touch_player_last_seen catch:', err);
         });
     }
+  }
+
+  /* _touchLastSeen — lightweight DB ping, no throttle.
+     Called by heartbeat every 20s so advance_ball_call() always
+     sees an active player and keeps the ball caller running. */
+  function _touchLastSeen() {
+    if (!_client || !_connected || !_sessionKey) return;
+    _client.rpc('touch_player_last_seen', { p_session_key: _sessionKey })
+      .then(function(res) {
+        if (res.error) console.warn('[Progressive] heartbeat touch error:', res.error.message);
+      })
+      .catch(function(err) {
+        console.warn('[Progressive] heartbeat touch catch:', err);
+      });
+  }
+
+  /* _startHeartbeat — begins the 20-second last_seen heartbeat.
+     Called once after player registers. Stops on page unload. */
+  function _startHeartbeat() {
+    if (_heartbeatTimer) return; /* already running */
+    _touchLastSeen(); /* touch immediately on register */
+    _heartbeatTimer = setInterval(function() {
+      _touchLastSeen();
+    }, _HEARTBEAT_MS);
+  }
+
+  function _stopHeartbeat() {
+    if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
   }
 
     /* ═══════════════════════════════════════════════════════════════
@@ -376,6 +411,7 @@ var Progressive = (function () {
     if (typeof window !== 'undefined') {
       window.addEventListener('offline', function() { if (!_localMode) _goLocalMode(); });
       window.addEventListener('online',  function() { setTimeout(function() { if (_localMode) _goOnlineMode(); }, 1000); });
+      window.addEventListener('beforeunload', function() { _stopHeartbeat(); });
     }
   }
 

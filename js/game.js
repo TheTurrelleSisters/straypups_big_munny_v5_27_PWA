@@ -614,9 +614,15 @@ function doBingoSpin(){
      spin press so all players see the exact same sequence. */
   if(BG.usingServerBalls && typeof WABC !== 'undefined') {
     var _wabcSeq = WABC.getSequence();
-    if(_wabcSeq && _wabcSeq.length === 75) BG.callSeq = _wabcSeq;
+    if(!_wabcSeq || _wabcSeq.length !== 75) {
+      /* Sequence not ready — DB may be restarting */
+      toast('Ball call unavailable \u2014 please wait for connection');
+      S.spinning=false; S.bal+=S.cpl; setCtrl(true); updUI();
+      return [];
+    }
+    BG.callSeq = _wabcSeq;
     if(BG.seqExhausted) {
-      _requestNewWABCSequence(); /* fallback if broadcast not yet received */
+      _requestNewWABCSequence();
       prevBallPos = 40;
     }
     BG.seqExhausted = false;
@@ -1239,11 +1245,10 @@ function doSpin(){
   if(S.bal<S.cpl){toast('INSERT CASH TO PLAY');return;}
   if(_reelWinH===0) initReelSlots();
   S.spinning=true;S.bal-=S.cpl;
-  /* v5.115: Progressive.contribute() and _forceJP removed — Force Jackpot
-     feature is no longer active. registerPlayer and updateLastSpin kept. */
   if(typeof Progressive!=='undefined'){
     Progressive.registerPlayer(null, window._playerNickname || null);
     if(Progressive.updateLastSpin) Progressive.updateLastSpin();
+    if(Progressive.contribute) Progressive.contribute(S.cpl);
   }
   var _spinBalBefore=S.bal+S.cpl; var _spinCardSerial=BG.cardSerial;
   setWin(0,'');document.getElementById('bt-box').classList.remove('on');

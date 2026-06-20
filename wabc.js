@@ -222,6 +222,12 @@ var WABC = (function() {
         if (status === 'SUBSCRIBED') {
           _reconnectDelay = 2000;
           if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
+          /* Re-fetch sequence on every reconnect — DB may have advanced
+             ball_pos or issued a new sequence while we were disconnected */
+          _fetchInitial(function() {
+            _notifyNewCall(); /* notify game.js to resync card/strip */
+            console.log('[WABC] Reconnected — sequence re-fetched, pos=' + _ballPos);
+          });
           console.log('[WABC] Broadcast channel connected');
         }
         if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {

@@ -606,6 +606,15 @@ function _requestNewWABCSequence() {
           payload: { sequence: _newSeq, issued_at: _newIAt }
         });
       }
+      /* Sync WABC's own internal _issuedAt/_sequence/_ballPos for the
+         triggering player. Without this, WABC's seq_issued_at guard on
+         incoming 'pos' broadcasts keeps comparing against the OLD
+         issued_at and silently drops every ball-position update from
+         the new sequence — freezing the strip at ball 40 (balls 41-75
+         never animate) even though awaitingNewSeq has been cleared. */
+      if(typeof WABC !== 'undefined' && WABC.applyLocalNewCall) {
+        WABC.applyLocalNewCall(_newSeq, _newIAt);
+      }
       BG.callSeq = _newSeq;
       BG.ballPos = 40;
       BG.usingServerBalls = true;

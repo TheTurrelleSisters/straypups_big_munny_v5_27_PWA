@@ -310,6 +310,24 @@ var WABC = (function() {
   function onSyncResponse(fn)  { _syncListeners.push(fn); }
   function setPosProvider(fn)  { _posProvider = fn; }
 
+  /* applyLocalNewCall — for the player who TRIGGERED a new sequence
+     (e.g. via upsert_ball_call on Cover All). The 'wabc-ballpos' channel
+     is broadcast.self=false, so this player never receives their own
+     new_call broadcast and onNewCall() never fires for them. Without
+     this, their internal _issuedAt stays stale, and the 'pos' broadcast
+     guard (which drops any event whose seq_issued_at doesn't match
+     _issuedAt) silently filters out every future ball-position update,
+     freezing their strip at ball 40 even though they're not "awaiting".
+     Caller is responsible for its own UI update — this only syncs the
+     internal state used by the seq_issued_at guard, and does NOT fire
+     the onNewCall listeners (the caller already handled its own UI). */
+  function applyLocalNewCall(sequence, issuedAt) {
+    if (!sequence || sequence.length !== 75) return;
+    _sequence  = sequence;
+    _ballPos   = 0;
+    _issuedAt  = issuedAt || new Date().toISOString();
+  }
+
   return {
     init:          init,
     getSequence:   getSequence,
@@ -321,7 +339,8 @@ var WABC = (function() {
     onForceLocal:  onForceLocal,
     onRestoreWide: onRestoreWide,
     onSyncResponse: onSyncResponse,
-    setPosProvider: setPosProvider
+    setPosProvider: setPosProvider,
+    applyLocalNewCall: applyLocalNewCall
   };
 
 }());

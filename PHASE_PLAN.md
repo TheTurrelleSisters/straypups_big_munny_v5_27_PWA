@@ -1440,6 +1440,39 @@ Files changed: `js/game.js`, `js/progressive.js`, `broadcast-init.js`
 
 ---
 
+### v5.130 — Fix: Balls 41-75 Frozen After Cover All (Stale WABC issued_at)
+
+**Files changed:** `js/game.js`, `wabc.js`, `index.html`, `service-worker.js`
+
+**Bug:** Introduced by the v5.129 fix. After Cover All, the triggering
+player's own ball strip stopped advancing — balls 41-75 never animated
+again on the new sequence (game appeared frozen at ball 40 for that
+player only).
+
+**Root cause:** v5.129 made `_requestNewWABCSequence()` update `BG.*`
+locally for the triggering player instead of relying on `WABC.onNewCall`
+(since that listener never fires for the sender — see v5.129). But
+`wabc.js`'s OWN internal state (`_sequence`, `_ballPos`, `_issuedAt`) was
+never updated to match — only `BG.*` in game.js was. The `pos` broadcast
+handler in `wabc.js` guards every incoming position update by comparing
+`payload.seq_issued_at` against its internal `_issuedAt`, silently
+dropping any event that doesn't match. Since the triggering player's
+internal `_issuedAt` still pointed at the OLD sequence, every
+post-reshuffle `pos` event for them was filtered out.
+
+**Fix:** Added `WABC.applyLocalNewCall(sequence, issuedAt)` — syncs
+`wabc.js`'s internal `_sequence`/`_ballPos`/`_issuedAt` without re-firing
+`onNewCall` listeners (the caller already applied its own UI update).
+`_requestNewWABCSequence()` now calls this right after broadcasting, so
+the triggering player's `seq_issued_at` guard matches the new sequence
+and subsequent `pos` broadcasts for balls 41-75 are no longer dropped.
+
+**No SQL changes required.**
+
+- Cache bust: spbm-v5130
+
+---
+
 ### v5.129 — Fix: WABC Cover All Lockup (Self-Broadcast Echo Never Received)
 
 **Files changed:** `js/game.js`, `index.html`, `service-worker.js`

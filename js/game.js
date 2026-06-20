@@ -469,7 +469,7 @@ function _showNextPattern(){
   } else {
     nameEl.textContent=pat.name.toUpperCase()+' — In '+pat.balls+' Balls | $'+pat.pay[0]+'/$'+pat.pay[1]+'/$'+pat.pay[2];
   }
-  _showcaseTimer=setTimeout(_showNextPattern,1600);
+  _showcaseTimer=setTimeout(_showNextPattern,3500);
 }
 
 /* -- ENTERTAINMENT PHASE STATE --
@@ -487,23 +487,16 @@ function stopActiveCaller(){
 }
 
 /* _onServerBallPos — called by WABC.onChange when server broadcasts a new
-   ball position. The server counts ALL 75 balls from pos 1-75 continuously.
-   We track BG.ballPos for all positions but only daub/render balls > 40
-   (entertainment phase) — balls 1-40 are already evaluated in doBingoSpin. */
+   ball position. Server only drives balls 41-75 (entertainment phase).
+   BG.ballPos starts at 40 after every spin/sequence reset.
+   Server sends pos=41, 42... 74 then issues a new sequence back at 40. */
 function _onServerBallPos(newPos){
   if(!BG.card||!BG.callSeq||BG.callSeq.length!==75) return;
-  if(newPos<1||newPos>75) return;    /* ignore out-of-range */
+  if(newPos<=40||newPos>75) return;  /* server only sends 41-75 now */
   if(newPos<=BG.ballPos) return;     /* ignore stale or duplicate pos */
 
-  /* Always update BG.ballPos so game stays in sync with server */
+  /* Update BG.ballPos */
   BG.ballPos=newPos;
-
-  /* Only daub and render entertainment balls (41-75).
-     Balls 1-40 are pre-called and already evaluated in doBingoSpin. */
-  if(newPos<=40) return;
-
-  /* Mark entertainment phase as active if not already */
-  if(!BG.entTimer) startActiveCaller();
 
   /* Daub all entertainment balls up to current position
      (handles catch-up if player joins mid-sequence) */
@@ -1585,21 +1578,20 @@ function initProgressiveMeter(){
     BG.seqExhausted = false;
     BG.awaitingNewSeq = false;
     BG._coverAll75Fired = false;
-    BG.ballPos = 0;
+    BG.ballPos = 40; /* server starts entertainment phase at 40 */
     updateBallCallBadge();
-    if (BG.card && Object.keys(BG.cardNumSet).length > 0) {
+    /* Only re-render card and strip during active play.
+       During idle (pre-spin), strip stays empty — player hasn't spun yet. */
+    if(GS.state==='active' && BG.card && Object.keys(BG.cardNumSet).length > 0) {
       BG.matchedCells = {12: true};
       for (var _rb = 0; _rb < 40; _rb++) {
         var _rball = BG.callSeq[_rb];
         if (BG.cardNumSet[_rball] !== undefined)
           BG.matchedCells[BG.cardNumSet[_rball]] = true;
       }
-      /* Don't overwrite showcase pattern during idle */
-      if(GS.state==='active'){
-        renderBingoCard(BG.card, BG.matchedCells, null);
-      }
+      renderBingoCard(BG.card, BG.matchedCells, null);
       renderBallStrip(BG.callSeq, 40, BG.cardNumSet);
-    } else {
+    } else if(GS.state!=='active') {
       clearBallStrip();
     }
   });
@@ -1743,7 +1735,7 @@ function initProgressiveMeter(){
   } catch(e) {}
 }());
 BG.callSeq=[]; /* populated by WABC on connect */
-BG.ballPos=0;
+BG.ballPos=40; /* server drives balls 41-75; 1-40 handled by doBingoSpin */
 // State 1: idle — show pattern showcase
 GS.state='idle';
 buildBallStrip(); // pre-build ball nodes (empty)

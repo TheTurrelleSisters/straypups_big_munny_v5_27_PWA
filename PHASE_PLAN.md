@@ -1440,6 +1440,68 @@ Files changed: `js/game.js`, `js/progressive.js`, `broadcast-init.js`
 
 ---
 
+### v5.127 — Pattern Showcase Speed: 1600ms → 3500ms
+
+**Files changed:** `js/game.js`, `index.html`, `service-worker.js`
+
+Pattern showcase was cycling too fast. Reverted to 3500ms per pattern.
+
+- Cache bust: spbm-v5127
+
+---
+
+### v5.126 — Fix: Ball Call Architecture Alignment (Server Drives 41-75 Only)
+
+**Files changed:** `js/game.js`, `index.html`, `service-worker.js`
+
+**Architecture correction:**
+The server (wabc-ball-ticker) now only broadcasts ball positions 41-75.
+Balls 1-40 are the bingo evaluation zone — handled instantly by doBingoSpin().
+The server starts every new sequence at ball_pos=40 and counts to 74.
+
+**game.js changes:**
+- BG.ballPos init: 0 → 40 (server starts at 40)
+- onBallCallUpdate: BG.ballPos = 0 → 40 (new sequence starts at 40)
+- All onNewCall/onBallCallUpdate resets: 0 → 40 (5 locations)
+- _onServerBallPos: guard updated to newPos<=40 (reject anything ≤40)
+- _onServerBallPos: removed redundant second <=40 check and startActiveCaller
+  (entTimer flag set correctly by _continueSpinAfterClaim)
+
+**SQL changes (already run):**
+- upsert_ball_call v1.1: ball_pos starts at 40 not 0
+- advance_ball_call v1.2: only advances 41-74, resets at 74
+- ball_call row reset: UPDATE ball_call SET ball_pos=40
+
+**No additional SQL required for this version.**
+
+- Cache bust: spbm-v5126
+
+---
+
+### v5.125 — Fix: Ball Strip Pre-filled Before Spin + Reconnect Noise
+
+**Files changed:** `js/game.js`, `wabc.js`, `index.html`, `service-worker.js`
+
+**Bug 1 — Ball strip showed balls 1-40 before player spun:**
+`onBallCallUpdate` was calling `renderBallStrip(BG.callSeq, 40, ...)` regardless
+of `GS.state`. On game load, WABC fires `_notifyNewCall` which triggered
+`onBallCallUpdate` which filled the strip with 40 balls even before spin.
+Fix: gated `renderBingoCard` and `renderBallStrip` on `GS.state==='active'`.
+During idle, `clearBallStrip()` is called instead.
+
+**Bug 2 — Reconnect was firing _notifyNewCall on every reconnect:**
+The reconnect handler called `_notifyNewCall()` unconditionally, which
+re-triggered `onBallCallUpdate` and re-rendered the strip every time WABC
+reconnected (e.g. after DB restart, network blip). Now only fires if
+`issued_at` actually changed — meaning a genuinely new sequence was issued
+while disconnected.
+
+**No SQL changes required.**
+
+- Cache bust: spbm-v5125
+
+---
+
 ### v5.124 — Fix: Ball Strip Frozen at 40 (issued_at Format Mismatch)
 
 **Files changed:** `wabc.js`, `supabase/advance_ball_call.sql`, `index.html`, `service-worker.js`

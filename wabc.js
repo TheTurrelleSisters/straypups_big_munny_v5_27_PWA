@@ -233,10 +233,14 @@ var WABC = (function() {
         if (status === 'SUBSCRIBED') {
           _reconnectDelay = 2000;
           if (_reconnectTimer) { clearTimeout(_reconnectTimer); _reconnectTimer = null; }
-          /* Re-fetch sequence on every reconnect — DB may have advanced
-             ball_pos or issued a new sequence while we were disconnected */
+          /* Re-fetch sequence on reconnect. Only notify new_call if
+             issued_at changed (genuinely new sequence) — not on every
+             reconnect, which was causing ball strip to fill pre-spin. */
+          var _prevIssuedAt = _issuedAt;
           _fetchInitial(function() {
-            _notifyNewCall(); /* notify game.js to resync card/strip */
+            if (_issuedAt !== _prevIssuedAt) {
+              _notifyNewCall(); /* new sequence issued while disconnected */
+            }
             console.log('[WABC] Reconnected — sequence re-fetched, pos=' + _ballPos);
           });
           console.log('[WABC] Broadcast channel connected');

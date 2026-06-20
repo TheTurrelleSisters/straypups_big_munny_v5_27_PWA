@@ -1440,6 +1440,39 @@ Files changed: `js/game.js`, `js/progressive.js`, `broadcast-init.js`
 
 ---
 
+### v5.129 — Fix: WABC Cover All Lockup (Self-Broadcast Echo Never Received)
+
+**Files changed:** `js/game.js`, `index.html`, `service-worker.js`
+
+**Bug:** Two players playing simultaneously — when Player A hit Cover All
+(40 or 75), the game locked up on "New ball sequence loading — please wait"
+for Player A while Player B kept playing on the new sequence. When B later
+hit Cover All, A unlocked and B locked instead. Players ping-ponged between
+locked/unlocked depending on who triggered Cover All last.
+
+**Root cause:** `wabc.js`'s `wabc-ballpos` channel is configured with
+`broadcast: { self: false }`, so a client never receives its own broadcast
+messages back. `_requestNewWABCSequence()` (called from `_handleCoverAll`/
+`_handleCoverAll75`) sets `BG.awaitingNewSeq = true`, then broadcasts the
+new sequence — but the ONLY place that cleared `awaitingNewSeq` was the
+`WABC.onNewCall` listener, which never fires for the sender's own message.
+The triggering player stayed locked forever; only another player's
+unrelated Cover All broadcast (which they DO receive) would incidentally
+clear it.
+
+**Fix:** `_requestNewWABCSequence()` now applies the new sequence to `BG`
+locally immediately after the `upsert_ball_call` RPC succeeds (resets
+`awaitingNewSeq`, `seqExhausted`, `ballPos`, `_coverAll75Fired`, re-renders
+card/strip), instead of relying on the broadcast echo. The broadcast to
+other players is unchanged — they still pick it up via `WABC.onNewCall`
+as before.
+
+**No SQL changes required.**
+
+- Cache bust: spbm-v5129
+
+---
+
 ### v5.128 — Fix: Ball Strip Pre-filled on Game Load
 
 **Files changed:** `js/game.js`, `index.html`, `service-worker.js`

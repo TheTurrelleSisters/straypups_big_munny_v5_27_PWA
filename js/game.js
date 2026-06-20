@@ -593,7 +593,12 @@ function _requestNewWABCSequence() {
       var _newSeq = res.data.sequence  || [];
       var _newIAt = res.data.issued_at || new Date().toISOString();
       if(_newSeq.length !== 75) return;
-      /* Broadcast to all players — wabc-ballpos channel */
+      /* Broadcast to all OTHER players — wabc-ballpos channel is configured
+         with broadcast.self=false, so the sender never receives this event
+         back. Apply the new sequence locally right here for the triggering
+         player instead of waiting on WABC.onNewCall, which would never
+         fire for them and would leave THIS player's BG.awaitingNewSeq
+         stuck on true forever (the "Ball Sequence Loading" lockup). */
       if(window._wabcChannel) {
         window._wabcChannel.send({
           type:    'broadcast',
@@ -601,6 +606,25 @@ function _requestNewWABCSequence() {
           payload: { sequence: _newSeq, issued_at: _newIAt }
         });
       }
+      BG.callSeq = _newSeq;
+      BG.ballPos = 40;
+      BG.usingServerBalls = true;
+      BG.seqExhausted = false;
+      BG.awaitingNewSeq = false;
+      BG._coverAll75Fired = false;
+      if(BG.card && Object.keys(BG.cardNumSet).length > 0) {
+        BG.matchedCells = {12:true};
+        for(var _nc=0;_nc<40;_nc++){
+          var _ncball=BG.callSeq[_nc];
+          if(BG.cardNumSet[_ncball]!==undefined)
+            BG.matchedCells[BG.cardNumSet[_ncball]]=true;
+        }
+        if(GS.state==='active'){
+          renderBingoCard(BG.card,BG.matchedCells,null);
+        }
+        renderBallStrip(BG.callSeq,40,BG.cardNumSet);
+      }
+      updateBallCallBadge();
     }).catch(function(err) {
       console.warn('[WABC] _requestNewWABCSequence catch:', err);
     });

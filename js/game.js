@@ -487,17 +487,26 @@ function stopActiveCaller(){
 }
 
 /* _onServerBallPos — called by WABC.onChange when server broadcasts a new
-   ball position. Replaces the old _activeCallNext local timer tick.
-   Only processes balls 41-75 (entertainment phase). */
+   ball position. The server counts ALL 75 balls from pos 1-75 continuously.
+   We track BG.ballPos for all positions but only daub/render balls > 40
+   (entertainment phase) — balls 1-40 are already evaluated in doBingoSpin. */
 function _onServerBallPos(newPos){
-  if(!BG.entTimer) return;           /* not in entertainment phase */
   if(!BG.card||!BG.callSeq||BG.callSeq.length!==75) return;
-  if(newPos<=40||newPos>75) return;  /* only entertainment phase balls */
+  if(newPos<1||newPos>75) return;    /* ignore out-of-range */
   if(newPos<=BG.ballPos) return;     /* ignore stale or duplicate pos */
 
+  /* Always update BG.ballPos so game stays in sync with server */
   BG.ballPos=newPos;
 
-  /* Daub all balls up to current position (handles catch-up on rejoin) */
+  /* Only daub and render entertainment balls (41-75).
+     Balls 1-40 are pre-called and already evaluated in doBingoSpin. */
+  if(newPos<=40) return;
+
+  /* Mark entertainment phase as active if not already */
+  if(!BG.entTimer) startActiveCaller();
+
+  /* Daub all entertainment balls up to current position
+     (handles catch-up if player joins mid-sequence) */
   for(var _bp=40;_bp<BG.ballPos;_bp++){
     var _bball=BG.callSeq[_bp];
     if(BG.cardNumSet[_bball]!==undefined)

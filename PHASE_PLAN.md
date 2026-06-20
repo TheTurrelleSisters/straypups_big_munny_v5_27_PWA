@@ -1440,6 +1440,27 @@ Files changed: `js/game.js`, `js/progressive.js`, `broadcast-init.js`
 
 ---
 
+### v5.124 — Fix: Ball Strip Frozen at 40 (issued_at Format Mismatch)
+
+**Files changed:** `wabc.js`, `supabase/advance_ball_call.sql`, `index.html`, `service-worker.js`
+
+**Root cause:** Every `pos` broadcast event from the Edge Function was being
+silently dropped by the seq_issued_at guard in wabc.js. Postgres returns
+timestamps as "2026-06-20 00:33:58+00" but the Supabase REST API returns
+"2026-06-20T00:33:58+00:00". String comparison failed so all pos events
+were rejected, BG.ballPos never advanced, ball strip frozen at 40 forever.
+
+**Fixes:**
+1. wabc.js: normalize both timestamps to first 19 chars before comparing
+2. advance_ball_call.sql v1.1: cast issued_at to ISO 8601 via to_char()
+
+**SQL ACTION REQUIRED:** Run updated supabase/advance_ball_call.sql in
+Supabase SQL Editor.
+
+- Cache bust: spbm-v5124
+
+---
+
 ### v5.122 — Heartbeat, Contribution Fix, WABC Reconnect Guard
 
 **Files changed:** `js/game.js`, `js/progressive.js`, `wabc.js`, `index.html`, `service-worker.js`

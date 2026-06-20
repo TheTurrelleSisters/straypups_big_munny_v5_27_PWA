@@ -160,8 +160,15 @@ var WABC = (function() {
       .on('broadcast', { event: 'pos' }, function(msg) {
         if (!msg || !msg.payload) return;
         var p = msg.payload;
-        /* Guard: ignore stale sequence updates */
-        if (p.seq_issued_at && _issuedAt && p.seq_issued_at !== _issuedAt) return;
+        /* Guard: ignore pos events from a different sequence.
+           Normalize both timestamps before comparing — Postgres returns
+           "2026-06-20 00:33:58+00" while REST API returns
+           "2026-06-20T00:33:58+00:00". Strip to first 19 chars for comparison. */
+        if (p.seq_issued_at && _issuedAt) {
+          var _pNorm = String(p.seq_issued_at).replace('T',' ').substr(0,19);
+          var _iNorm = String(_issuedAt).replace('T',' ').substr(0,19);
+          if (_pNorm !== _iNorm) return;
+        }
         _ballPos = parseInt(p.pos, 10) || 0;
         _notifyChange();
       })
@@ -191,7 +198,11 @@ var WABC = (function() {
         /* Another player answered our sync_request with their live position. */
         if (!msg || !msg.payload || _syncResolved) return;
         var p = msg.payload;
-        if (p.seq_issued_at && _issuedAt && p.seq_issued_at !== _issuedAt) return;
+        if (p.seq_issued_at && _issuedAt) {
+          var _pNorm = String(p.seq_issued_at).replace('T',' ').substr(0,19);
+          var _iNorm = String(_issuedAt).replace('T',' ').substr(0,19);
+          if (_pNorm !== _iNorm) return;
+        }
         var pos = parseInt(p.pos, 10) || 0;
         if (pos > _ballPos) {
           _ballPos = pos;

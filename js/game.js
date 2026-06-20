@@ -48,12 +48,8 @@ function sizeLayout(){
     initReelSlots();
     if(!_ballNodes||_ballNodes.length<75) buildBallStrip();
     if(!_cardNodes||_cardNodes.length<25) buildBingoCardNodes();
-    /* Re-render showcase after card rebuild during idle — always go through
-       startPatternShowcase() so the existing timer is cleared first.
-       Direct _showNextPattern() calls from here stacked timers on top of
-       the one already running from startPatternShowcase(), causing the
-       double-run glitch (two timers racing at different phases). */
-    if(GS.state==='idle') startPatternShowcase();
+    /* Re-render current showcase pattern after any card rebuild during idle */
+    if(GS.state==='idle') _showNextPattern();
     setTimeout(function(){ if(_reelWinH===0) initReelSlots(); },300);
   },100);
 }
@@ -433,15 +429,13 @@ function stopPatternCycle(){
 var GS={state:'idle',hasSpun:false};
 
 /* -- PATTERN SHOWCASE (idle only) -- */
-var _showcaseTimer=null; var _showcaseIdx=0; var _showcaseRunning=false;
+var _showcaseTimer=null; var _showcaseIdx=0;
 function startPatternShowcase(){
-  stopPatternShowcase();   /* always clears timer + _showcaseRunning before restart */
+  stopPatternShowcase();
   _showcaseIdx=0;
-  _showcaseRunning=true;
   _showNextPattern();
 }
 function stopPatternShowcase(){
-  _showcaseRunning=false;
   if(_showcaseTimer){clearTimeout(_showcaseTimer);_showcaseTimer=null;}
   /* Clear frozen pattern from card so spin doesn't flash last showcased pattern */
   document.getElementById('bingo-pattern-name').textContent='\u00a0';
@@ -453,49 +447,29 @@ function stopPatternShowcase(){
   }
 }
 function _showNextPattern(){
-  /* Dual guard: GS.state must be idle AND _showcaseRunning must be true.
-     _showcaseRunning is only set by startPatternShowcase() and cleared by
-     stopPatternShowcase(). This prevents any stale timer (e.g. from a
-     sizeLayout resize call) from re-entering the loop after it was stopped. */
-  if(!_showcaseRunning||GS.state!=='idle') return;
+  if(GS.state!=='idle') return;
+  var pat=BINGO_PATTERNS[_showcaseIdx%BINGO_PATTERNS.length];
+  _showcaseIdx++;
   var nameEl=document.getElementById('bingo-pattern-name');
-  /* Brief blank frame between patterns — clears card and name for 250ms
-     before the next pattern renders. Eliminates the glitch/flash caused
-     by simultaneous cell transitions firing on the previous pattern's
-     highlighted cells. Gives a clean, consistent rhythm at one speed. */
   nameEl.style.color='#f5d878';
-  nameEl.textContent='\u00a0';
-  if(_cardNodes&&_cardNodes.length===25){
-    for(var _bi=0;_bi<25;_bi++){
-      _cardNodes[_bi].className='bc'+(_bi===12?' free':'');
-      _cardNodes[_bi].textContent=_bi===12?'*':'';
-    }
+  // Empty white cells — no numbers shown during idle showcase
+  var dummyCells=[];
+  for(var i=0;i<25;i++) dummyCells.push(i===12?null:0); // 0 = empty, null = free space
+  var patMatched={12:true};
+  for(var ci=0;ci<pat.cells.length;ci++) patMatched[pat.cells[ci]]=true;
+  renderBingoCard(dummyCells,patMatched,pat.cells);
+  // Set name after renderBingoCard so it's the final text shown
+  if(pat.isProgressive){
+    // Lazy-T: show name + threshold + "Progressive Pot" (pay:[0,0,0] — pot awarded separately)
+    nameEl.textContent=pat.name.toUpperCase()+' — In '+pat.balls+' Balls | PROGRESSIVE POT';
+    nameEl.style.color='#ffd700';
+  } else if(!pat.reel){
+    // Cover All 40: no reel stop — show name, balls, and penny award
+    nameEl.textContent=pat.name.toUpperCase()+' — In '+pat.balls+' Balls | $'+pat.pay[0].toFixed(2);
+  } else {
+    nameEl.textContent=pat.name.toUpperCase()+' — In '+pat.balls+' Balls | $'+pat.pay[0]+'/$'+pat.pay[1]+'/$'+pat.pay[2];
   }
-  _showcaseTimer=setTimeout(function(){
-    if(GS.state!=='idle') return;
-    var pat=BINGO_PATTERNS[_showcaseIdx%BINGO_PATTERNS.length];
-    _showcaseIdx++;
-    /* Set name FIRST — text and card change together in the same frame */
-    if(pat.isProgressive){
-      nameEl.textContent=pat.name.toUpperCase()+' \u2014 In '+pat.balls+' Balls | PROGRESSIVE POT';
-      nameEl.style.color='#ffd700';
-    } else if(!pat.reel){
-      nameEl.textContent=pat.name.toUpperCase()+' \u2014 In '+pat.balls+' Balls | $'+pat.pay[0].toFixed(2);
-      nameEl.style.color='#f5d878';
-    } else {
-      nameEl.textContent=pat.name.toUpperCase()+' \u2014 In '+pat.balls+' Balls | $'+pat.pay[0]+'/$'+pat.pay[1]+'/$'+pat.pay[2];
-      nameEl.style.color='#f5d878';
-    }
-    /* Render card highlight after name is set */
-    var dummyCells=[];
-    for(var i=0;i<25;i++) dummyCells.push(i===12?null:0);
-    var patMatched={12:true};
-    for(var ci=0;ci<pat.cells.length;ci++) patMatched[pat.cells[ci]]=true;
-    renderBingoCard(dummyCells,patMatched,pat.cells);
-    /* Fixed 5000ms dwell — same for every pattern, enough time to read
-       name, ball threshold, and pay at any complexity. No variable speeds. */
-    _showcaseTimer=setTimeout(_showNextPattern,5000);
-  },250); /* 250ms blank gap between patterns */
+  _showcaseTimer=setTimeout(_showNextPattern,3500);
 }
 
 /* -- ENTERTAINMENT PHASE STATE --
@@ -532,12 +506,7 @@ function _onServerBallPos(newPos){
       BG.matchedCells[BG.cardNumSet[_bball]]=true;
   }
 
-  /* Gate: never overwrite the card during Red Spin or any active spin.
-     runRS sets pattern highlights on the card as each reel stops — a
-     server ball-pos event mid-Red Spin must not wipe those highlights
-     by re-rendering with winPatternCells=null. The ball strip can still
-     update (server position is authoritative for the strip display). */
-  if(GS.state==='active'&&!S.spinning){
+  if(GS.state==='active'){
     renderBingoCard(BG.card,BG.matchedCells,null);
   }
   renderBallStrip(BG.callSeq,BG.ballPos,BG.cardNumSet);
@@ -579,19 +548,23 @@ function _handleCoverAll75(){
   _broadcastCoverAll('Cover All — 75 Balls!');
 }
 
-/* _broadcastCoverAll — credits $0.01 and shows local toast to the winning player only.
+/* _broadcastCoverAll — credits $0.01, shows local toast, broadcasts to all players.
    msg: display string e.g. 'Cover All — 40 Balls!' or 'Cover All — 75 Balls!'
-   IMPORTANT: Cover All is a sequence/system event, NOT a player-facing announcement.
-   The $0.01 award and toast are LOCAL ONLY — only the player whose spin triggered
-   Cover All receives the penny and sees the toast. Other players learn about the new
-   sequence via WABC (upsert_ball_call broadcast), not through broadcast_messages.
-   No insert into broadcast_messages — prevents:
-     (a) idle/non-spinning players receiving a misleading "Cover All" win banner
-     (b) startup message spam when _checkUnreadMessages replays accumulated rows */
+   No-op in local mode or when DB unavailable. */
 function _broadcastCoverAll(msg){
-  var _msg = msg || 'Cover All Achieved!';
+  var _msg = msg || 'GAME END — Cover All Achieved';
   toast(_msg);
   S.bal+=0.01;updUI();
+  if(!BG.usingServerBalls||!window._floorSupabaseClient) return;
+  window._floorSupabaseClient.from('broadcast_messages').insert({
+    message:_msg,
+    type:'general',
+    created_by:window._playerNickname||'player'
+  }).then(function(res){
+    if(res.error) console.warn('[CoverAll] broadcast insert error:',res.error.message);
+  }).catch(function(err){
+    console.warn('[CoverAll] broadcast insert catch:',err);
+  });
 }
 
 
@@ -1194,10 +1167,11 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
     _refreshSpinWatchdog();
     console.log('[RedSpin] Pattern: '+pat.name+', reel: '+pat.reel);
     badge.textContent='RED SPIN '+seqIdx;
-    /* Clear pattern name and card highlight BEFORE reels spin —
-       player sees no answer until the 3rd reel lands. */
+    /* Show this pattern's name + highlight its cells on the bingo card
+       while its reel animation plays. */
     var _pnEl=document.getElementById('bingo-pattern-name');
-    if(_pnEl) _pnEl.textContent='\u00a0';
+    if(_pnEl) _pnEl.textContent=pat.name.toUpperCase();
+    renderBingoCard(BG.card,BG.matchedCells,pat.cells);
     var reelSyms=REEL_SYMS[pat.reel]||REEL_SYMS['none'];
     var sr=forcedSpinResult(reelSyms);
     sndBonusSpin();
@@ -1209,10 +1183,6 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
       rsDone++;
       console.log('[RedSpin] _onReelDone called, rsDone='+rsDone);
       if(rsDone<3) return; /* wait for all 3 reels to finish */
-      /* Reveal pattern name + card highlight NOW — exactly as 3rd reel lands.
-         Player sees the result at the moment of stop, not before the spin. */
-      if(_pnEl) _pnEl.textContent=pat.name.toUpperCase();
-      renderBingoCard(BG.card,BG.matchedCells,pat.cells);
       console.log('[RedSpin] All 3 reels done, firing 120ms callback');
       setTimeout(function(){
       var payAmt=pat.pay[cpl-1];
@@ -1652,9 +1622,7 @@ function initProgressiveMeter(){
         if (BG.cardNumSet[_rball] !== undefined)
           BG.matchedCells[BG.cardNumSet[_rball]] = true;
       }
-      /* Do not re-render card during spin/Red Spin — pattern highlights
-         set by runRS must remain locked until player presses Spin again. */
-      if(!S.spinning) renderBingoCard(BG.card, BG.matchedCells, null);
+      renderBingoCard(BG.card, BG.matchedCells, null);
       renderBallStrip(BG.callSeq, 40, BG.cardNumSet);
     } else if(GS.state!=='active') {
       clearBallStrip();
@@ -1742,8 +1710,7 @@ function initProgressiveMeter(){
               if(BG.cardNumSet[_ncball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_ncball]]=true;
             }
-            /* Do not re-render card during spin/Red Spin — pattern highlights locked. */
-            if(GS.state==='active'&&!S.spinning){
+            if(GS.state==='active'){
               renderBingoCard(BG.card,BG.matchedCells,null);
             }
             renderBallStrip(BG.callSeq,40,BG.cardNumSet);
@@ -1765,8 +1732,7 @@ function initProgressiveMeter(){
               if(BG.cardNumSet[_rwball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_rwball]]=true;
             }
-            /* Do not re-render card during spin/Red Spin — pattern highlights locked. */
-            if(GS.state==='active'&&!S.spinning){
+            if(GS.state==='active'){
               renderBingoCard(BG.card,BG.matchedCells,null);
             }
             renderBallStrip(BG.callSeq,40,BG.cardNumSet);

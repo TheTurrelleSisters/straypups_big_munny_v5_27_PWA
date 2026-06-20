@@ -1642,7 +1642,13 @@ function initProgressiveMeter(){
             }
           }
           if(!_ballNodes||_ballNodes.length<75) buildBallStrip();
-          renderBallStrip(BG.callSeq,40,BG.cardNumSet);
+          /* Only render pre-called balls if player has already spun.
+             During idle (pre-spin), strip stays empty. */
+          if(GS.state==='active'){
+            renderBallStrip(BG.callSeq,40,BG.cardNumSet);
+          } else {
+            clearBallStrip();
+          }
           _setSplashBallStatus('✔ Wide area ball call ready');
         } else {
           /* WABC returned empty — cannot play without ball sequence */

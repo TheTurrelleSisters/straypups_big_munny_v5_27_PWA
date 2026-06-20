@@ -1440,6 +1440,23 @@ Files changed: `js/game.js`, `js/progressive.js`, `broadcast-init.js`
 
 ---
 
+### v5.128 — Fix: Ball Strip Pre-filled on Game Load
+
+**Files changed:** `js/game.js`, `index.html`, `service-worker.js`
+
+**Bug:** On game load, WABC.init callback called renderBallStrip(BG.callSeq, 40)
+unconditionally — filling the strip with 40 balls before player ever spun.
+
+**Fix:** renderBallStrip in WABC init callback now gated on GS.state==='active'.
+During idle (pre-spin) clearBallStrip() is called instead — strip stays empty
+until player presses Spin.
+
+**No SQL changes required.**
+
+- Cache bust: spbm-v5128
+
+---
+
 ### v5.127 — Pattern Showcase Speed: 1600ms → 3500ms
 
 **Files changed:** `js/game.js`, `index.html`, `service-worker.js`

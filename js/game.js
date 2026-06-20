@@ -48,8 +48,12 @@ function sizeLayout(){
     initReelSlots();
     if(!_ballNodes||_ballNodes.length<75) buildBallStrip();
     if(!_cardNodes||_cardNodes.length<25) buildBingoCardNodes();
-    /* Re-render current showcase pattern after any card rebuild during idle */
-    if(GS.state==='idle') _showNextPattern();
+    /* Re-render showcase after card rebuild during idle — always go through
+       startPatternShowcase() so the existing timer is cleared first.
+       Direct _showNextPattern() calls from here stacked timers on top of
+       the one already running from startPatternShowcase(), causing the
+       double-run glitch (two timers racing at different phases). */
+    if(GS.state==='idle') startPatternShowcase();
     setTimeout(function(){ if(_reelWinH===0) initReelSlots(); },300);
   },100);
 }
@@ -429,13 +433,15 @@ function stopPatternCycle(){
 var GS={state:'idle',hasSpun:false};
 
 /* -- PATTERN SHOWCASE (idle only) -- */
-var _showcaseTimer=null; var _showcaseIdx=0;
+var _showcaseTimer=null; var _showcaseIdx=0; var _showcaseRunning=false;
 function startPatternShowcase(){
-  stopPatternShowcase();
+  stopPatternShowcase();   /* always clears timer + _showcaseRunning before restart */
   _showcaseIdx=0;
+  _showcaseRunning=true;
   _showNextPattern();
 }
 function stopPatternShowcase(){
+  _showcaseRunning=false;
   if(_showcaseTimer){clearTimeout(_showcaseTimer);_showcaseTimer=null;}
   /* Clear frozen pattern from card so spin doesn't flash last showcased pattern */
   document.getElementById('bingo-pattern-name').textContent='\u00a0';
@@ -447,7 +453,11 @@ function stopPatternShowcase(){
   }
 }
 function _showNextPattern(){
-  if(GS.state!=='idle') return;
+  /* Dual guard: GS.state must be idle AND _showcaseRunning must be true.
+     _showcaseRunning is only set by startPatternShowcase() and cleared by
+     stopPatternShowcase(). This prevents any stale timer (e.g. from a
+     sizeLayout resize call) from re-entering the loop after it was stopped. */
+  if(!_showcaseRunning||GS.state!=='idle') return;
   var nameEl=document.getElementById('bingo-pattern-name');
   /* Brief blank frame between patterns — clears card and name for 250ms
      before the next pattern renders. Eliminates the glitch/flash caused
@@ -522,7 +532,12 @@ function _onServerBallPos(newPos){
       BG.matchedCells[BG.cardNumSet[_bball]]=true;
   }
 
-  if(GS.state==='active'){
+  /* Gate: never overwrite the card during Red Spin or any active spin.
+     runRS sets pattern highlights on the card as each reel stops — a
+     server ball-pos event mid-Red Spin must not wipe those highlights
+     by re-rendering with winPatternCells=null. The ball strip can still
+     update (server position is authoritative for the strip display). */
+  if(GS.state==='active'&&!S.spinning){
     renderBingoCard(BG.card,BG.matchedCells,null);
   }
   renderBallStrip(BG.callSeq,BG.ballPos,BG.cardNumSet);
@@ -1637,7 +1652,9 @@ function initProgressiveMeter(){
         if (BG.cardNumSet[_rball] !== undefined)
           BG.matchedCells[BG.cardNumSet[_rball]] = true;
       }
-      renderBingoCard(BG.card, BG.matchedCells, null);
+      /* Do not re-render card during spin/Red Spin — pattern highlights
+         set by runRS must remain locked until player presses Spin again. */
+      if(!S.spinning) renderBingoCard(BG.card, BG.matchedCells, null);
       renderBallStrip(BG.callSeq, 40, BG.cardNumSet);
     } else if(GS.state!=='active') {
       clearBallStrip();
@@ -1725,7 +1742,8 @@ function initProgressiveMeter(){
               if(BG.cardNumSet[_ncball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_ncball]]=true;
             }
-            if(GS.state==='active'){
+            /* Do not re-render card during spin/Red Spin — pattern highlights locked. */
+            if(GS.state==='active'&&!S.spinning){
               renderBingoCard(BG.card,BG.matchedCells,null);
             }
             renderBallStrip(BG.callSeq,40,BG.cardNumSet);
@@ -1747,7 +1765,8 @@ function initProgressiveMeter(){
               if(BG.cardNumSet[_rwball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_rwball]]=true;
             }
-            if(GS.state==='active'){
+            /* Do not re-render card during spin/Red Spin — pattern highlights locked. */
+            if(GS.state==='active'&&!S.spinning){
               renderBingoCard(BG.card,BG.matchedCells,null);
             }
             renderBallStrip(BG.callSeq,40,BG.cardNumSet);

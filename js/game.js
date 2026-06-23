@@ -873,6 +873,9 @@ function _continueDoBingoSpin(prevBallPos) {
       BG._coverAll1to40=true;break;
     }
   }
+  /* Trigger spin continuation — _continueSpinAfterClaim is defined inside doSpin() */
+  if (typeof _continueSpinAfterClaim === 'function') _continueSpinAfterClaim();
+  /* Trigger spin continuation — _continueSpinAfterClaim is defined inside doSpin() */
   return BG.winPatterns;
 }
 
@@ -1454,12 +1457,14 @@ function doSpin(){
   }
   GS.hasSpun=true;GS.state='active';
 
-  var winPatterns=doBingoSpin();
+  var _spinResult=doBingoSpin();
 
   /* v6.1 FIX: doBingoSpin() returns null (not []) when WABC is unavailable.
      In that case the bet has already been refunded and controls re-enabled
      inside doBingoSpin — do not call _continueSpinAfterClaim at all. */
-  if(winPatterns===null) return;
+  /* v6.1 FIX: null=WABC bail-out; undefined=async Trigger 2 path handled internally */
+  if(_spinResult===null) return;
+  if(_spinResult===undefined) return; /* async Trigger 2: _continueDoBingoSpin calls _continueSpinAfterClaim */
 
   // ── SPIN CONTINUATION ───────────────────────────────────────────────────
   // ALL spin logic lives in _continueSpinAfterClaim().

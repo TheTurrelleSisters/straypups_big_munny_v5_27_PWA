@@ -2611,3 +2611,9 @@ commands armed while the player is mid-session.
 ## v6.8 — CRITICAL FIX: service-worker non-fatal pre-cache
 - `service-worker.js`: Added `.catch()` to `c.addAll(FILES)` — a 404 on any asset (GitHub Pages) no longer hard-fails SW install and blocks game load. Pre-cache failures are now logged as warnings only.
 - Cache: `spbm-v680`
+
+---
+
+## 6.9 — CRITICAL FIX: winPatterns undefined crash on spin
+- `js/game.js`: `doBingoSpin()` return value renamed to `_spinResult`. Added null guard (WABC bail-out) and undefined guard (async Trigger 2 path). `_continueDoBingoSpin()` now calls `_continueSpinAfterClaim()` directly via typeof check. Removed duplicate `_continueSpinAfterClaim` invocation that caused double-spin on Trigger 2 path.
+- Cache: `spbm-v690`

@@ -188,7 +188,7 @@ var BG={
   card:[],cardSerial:'',callSeq:[],cardNumSet:{},matchedCells:{},
   winPatterns:[],ballPos:0,entTimer:null,patternCycle:null,cycleIdx:0,
   _coverAll1to40:false,usingServerBalls:false,seqExhausted:false,
-  awaitingNewSeq:false,_coverAll75Fired:false
+  awaitingNewSeq:false,_coverAll75Fired:false,_pendingSeqRefresh:false
 };
 var COL_RANGES=[[1,15],[16,30],[31,45],[46,60],[61,75]];
 
@@ -515,8 +515,13 @@ function stopActiveCaller(){
 /* _onServerBallPos — called by WABC.onChange when server broadcasts a new
    ball position. Server only drives balls 41-75 (entertainment phase).
    BG.ballPos starts at 40 after every spin/sequence reset.
-   Server sends pos=41, 42... 74 then issues a new sequence back at 40. */
+   Server sends pos=41, 42... 74 then issues a new sequence back at 40.
+   v6.2: idle gate — if player has not yet spun (GS.state !== 'active'),
+   WABC continues tracking position internally but we do not daub, render,
+   or check Cover All. On Spin press doBingoSpin() re-syncs BG.ballPos
+   from WABC.getBallPos() so the strip instantly shows the live position. */
 function _onServerBallPos(newPos){
+  if(GS.state !== 'active') return;  /* idle: track in WABC only, no award */
   if(!BG.card||!BG.callSeq||BG.callSeq.length!==75) return;
   if(newPos<=40||newPos>75) return;  /* server only sends 41-75 now */
   if(newPos<=BG.ballPos) return;     /* ignore stale or duplicate pos */
@@ -668,6 +673,7 @@ function _requestNewWABCSequence() {
 
 function doBingoSpin(){
   stopPatternCycle();
+  BG._pendingSeqRefresh = false; /* v6.2: clear any deferred sequence refresh from mid-Red-Spin */
 
   // Preserve how many balls have been revealed so far.
   var prevBallPos=BG.ballPos||0;
@@ -680,7 +686,12 @@ function doBingoSpin(){
       /* Sequence not ready — DB may be restarting */
       toast('Ball call unavailable \u2014 please wait for connection');
       S.spinning=false; S.bal+=S.cpl; setCtrl(true); updUI();
-      return [];
+      /* v6.1 FIX: return null (not []) so doSpin can distinguish "bail out"
+         from "no bingo win". Returning [] caused _continueSpinAfterClaim()
+         to always run after a bail, firing a phantom reel animation on a
+         cancelled/refunded spin — the root cause of the first-spin wrong
+         reel symbol display. */
+      return null;
     }
     BG.callSeq = _wabcSeq;
     if(BG.seqExhausted) {
@@ -692,7 +703,8 @@ function doBingoSpin(){
     /* WABC unavailable — cannot proceed without a valid ball sequence */
     toast('Ball call unavailable \u2014 please wait for connection');
     S.spinning=false; S.bal+=S.cpl; setCtrl(true); updUI();
-    return [];
+    /* v6.1 FIX: return null sentinel — see note above */
+    return null;
   }
 
   // Fresh card for this spin
@@ -1329,6 +1341,11 @@ function doSpin(){
 
   var winPatterns=doBingoSpin();
 
+  /* v6.1 FIX: doBingoSpin() returns null (not []) when WABC is unavailable.
+     In that case the bet has already been refunded and controls re-enabled
+     inside doBingoSpin — do not call _continueSpinAfterClaim at all. */
+  if(winPatterns===null) return;
+
   // ── SPIN CONTINUATION ───────────────────────────────────────────────────
   // ALL spin logic lives in _continueSpinAfterClaim().
   function _continueSpinAfterClaim(){
@@ -1631,35 +1648,11 @@ function initProgressiveMeter(){
   }
   _setSplashConnStatus('Connecting to wide area…', '#ffaa00');
   Progressive.onChange(updateProgMeter);
-  Progressive.onBallCallUpdate(function(newSeq) {
-    /* onBallCallUpdate fires ONLY when issued_at changes (new sequence issued).
-       progressive.js now filters out ball_pos-only updates.
-       This means: Cover All fired, ball 75 exhausted, or operator issued NEW CALL.
-       Reset ballPos and re-dub current card against the new sequence. */
-    BG.callSeq = newSeq;
-    BG.usingServerBalls = true;
-    BG.seqExhausted = false;
-    BG.awaitingNewSeq = false;
-    BG._coverAll75Fired = false;
-    BG.ballPos = 40; /* server starts entertainment phase at 40 */
-    updateBallCallBadge();
-    /* Only re-render card and strip during active play.
-       During idle (pre-spin), strip stays empty — player hasn't spun yet. */
-    if(GS.state==='active' && BG.card && Object.keys(BG.cardNumSet).length > 0) {
-      BG.matchedCells = {12: true};
-      for (var _rb = 0; _rb < 40; _rb++) {
-        var _rball = BG.callSeq[_rb];
-        if (BG.cardNumSet[_rball] !== undefined)
-          BG.matchedCells[BG.cardNumSet[_rball]] = true;
-      }
-      /* Do not re-render card during spin/Red Spin — pattern highlights
-         set by runRS must remain locked until player presses Spin again. */
-      if(!S.spinning) renderBingoCard(BG.card, BG.matchedCells, null);
-      renderBallStrip(BG.callSeq, 40, BG.cardNumSet);
-    } else if(GS.state!=='active') {
-      clearBallStrip();
-    }
-  });
+  /* v6.2: Progressive.onBallCallUpdate removed — Progressive has no association
+     with WABC. Progressive owns the jackpot pot only. WABC owns the ball
+     sequence entirely. Ball sequence updates are handled exclusively by
+     WABC.onNewCall above. The onBallCallUpdate callback in progressive.js
+     was a dead stub (_notifyBallCall was defined but never called). */
   Progressive.onConnChange(function(isOnline) {
     var banner = document.getElementById('prog-offline-banner');
     var lbl    = document.getElementById('prog-meter-lbl');
@@ -1726,7 +1719,12 @@ function initProgressiveMeter(){
 
         /* ── WABC event hooks ── registered once here, never re-registered */
 
-        /* Operator issued Reset — new sequence, all players fast-forward to 40 */
+        /* Operator issued Reset or Cover All — new sequence, all players fast-forward to 40.
+           v6.2: Red Spin guard — if S.spinning is true (Red Spin in progress), absorb the
+           new sequence and reset flags but do NOT touch BG.matchedCells or render anything.
+           Set BG._pendingSeqRefresh so doBingoSpin() knows to re-sync on the next Spin press.
+           This prevents a mid-Red-Spin sequence change from wiping the card the player is
+           actively viewing. Win highlights remain visible until the next Spin press (Q3). */
         WABC.onNewCall(function(newSeq) {
           if(!newSeq||newSeq.length!==75) return;
           BG.callSeq = newSeq;
@@ -1735,20 +1733,25 @@ function initProgressiveMeter(){
           BG.seqExhausted = false;
           BG.awaitingNewSeq = false;
           BG._coverAll75Fired = false;
-          if(BG.card && Object.keys(BG.cardNumSet).length > 0) {
+          updateBallCallBadge();
+          if(S.spinning) {
+            /* Red Spin in progress — silently absorb, defer all rendering */
+            BG._pendingSeqRefresh = true;
+            return;
+          }
+          BG._pendingSeqRefresh = false;
+          if(GS.state==='active' && BG.card && Object.keys(BG.cardNumSet).length > 0) {
             BG.matchedCells = {12:true};
             for(var _nc=0;_nc<40;_nc++){
               var _ncball=BG.callSeq[_nc];
               if(BG.cardNumSet[_ncball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_ncball]]=true;
             }
-            /* Do not re-render card during spin/Red Spin — pattern highlights locked. */
-            if(GS.state==='active'&&!S.spinning){
-              renderBingoCard(BG.card,BG.matchedCells,null);
-            }
+            renderBingoCard(BG.card,BG.matchedCells,null);
             renderBallStrip(BG.callSeq,40,BG.cardNumSet);
+          } else if(GS.state!=='active') {
+            clearBallStrip();
           }
-          updateBallCallBadge();
         });
 
         /* Operator restored wide area — re-sync all players to WABC sequence */
@@ -1796,6 +1799,157 @@ function initProgressiveMeter(){
   });
 }
 
+
+/* ─────────────────────────────────────────────
+   VIRTUAL WALLET OVERLAY — v6.3
+   Opens on INSERT CASH button.
+   Source game slug: 'straypups_1d'
+───────────────────────────────────────────── */
+(function() {
+
+  var SB_URL  = 'https://gdmmoeggkqsvqnqyrubx.supabase.co';
+  var SB_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImdkbW1vZWdna3FzdnFucXlydWJ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4MDYzNTQsImV4cCI6MjA5NjM4MjM1NH0.i86afL3CMpmru4z3LZAbCJkxBiwo25QbwEji8tDBAis';
+
+  function _sbFetch(path, opts) {
+    var url = SB_URL + '/rest/v1/' + path;
+    var headers = {
+      'apikey':        SB_ANON,
+      'Authorization': 'Bearer ' + SB_ANON,
+      'Content-Type':  'application/json',
+      'Prefer':        opts.prefer || 'return=representation'
+    };
+    return fetch(url, {
+      method:  opts.method || 'GET',
+      headers: headers,
+      body:    opts.body ? JSON.stringify(opts.body) : undefined
+    }).then(function(r) {
+      if (opts.prefer === 'return=minimal') return {};
+      return r.json();
+    });
+  }
+
+  function _nick()  { return ((window._playerNickname||'')).toLowerCase().trim(); }
+  function _fmt(v)  { var n=parseFloat(v);if(isNaN(n)||n<0)n=0;return '$'+n.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,','); }
+  function _el(id)  { return document.getElementById(id); }
+
+  var _gameLabels = {
+    'straypups_1d':'StrayPups $1','straypups_5d':'StrayPups $5',
+    'maxines':"Maxine's",'tsbigmunny':'Turrelle Sisters',
+    'pokeher':'Poke-Her','lobby':'Lobby'
+  };
+
+  /* ── Open wallet overlay ── */
+  window._openWalletOv = function() {
+    var n      = _nick();
+    var balEl  = _el('wov-bal');
+    var nickEl = _el('wov-nick');
+    var listEl = _el('wov-list');
+    var ov     = _el('wallet-ov');
+    if (!ov) return;
+    if (nickEl) nickEl.textContent = n ? ('\u2605 '+(window._playerNickname||'')) : '';
+    if (listEl) listEl.innerHTML = '<div id="wov-empty">Loading\u2026</div>';
+    if (balEl)  balEl.textContent = '$0.00';
+    ov.classList.add('on');
+    if (!n) {
+      if (listEl) listEl.innerHTML = '<div id="wov-empty">No nickname set.<br>Return to lobby to log in.</div>';
+      return;
+    }
+    /* Load wallet balance */
+    _sbFetch('wallet?select=balance&nickname=eq.'+encodeURIComponent(n), {})
+      .then(function(d){ if(d&&d[0]&&balEl) balEl.textContent=_fmt(d[0].balance); })
+      .catch(function(){});
+    /* Load available vouchers */
+    _sbFetch('vouchers?select=id,amount,source_game,created_at'+
+      '&nickname=eq.'+encodeURIComponent(n)+
+      '&status=eq.available&order=created_at.desc', {})
+      .then(function(data) {
+        if (!data||!data.length) {
+          if(listEl) listEl.innerHTML='<div id="wov-empty">No vouchers available.<br>Return to lobby to generate one.</div>';
+          return;
+        }
+        if (listEl) {
+          listEl.innerHTML=data.map(function(v){
+            var d=new Date(v.created_at);
+            var dt=d.toLocaleDateString()+', '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+            var lbl=_gameLabels[v.source_game]||(v.source_game||'Lobby');
+            return '<div class="wov-voucher" onclick="_redeemVoucher('+v.id+','+v.amount+')">'+
+              '<div class="wov-v-icon">\u2b50</div>'+
+              '<div class="wov-v-body">'+
+                '<div class="wov-v-game">'+lbl+'</div>'+
+                '<div class="wov-v-date">'+dt+'</div>'+
+              '</div>'+
+              '<div style="text-align:right">'+
+                '<div class="wov-v-amt">'+_fmt(v.amount)+'</div>'+
+                '<div class="wov-v-use">TAP TO USE</div>'+
+              '</div>'+
+            '</div>';
+          }).join('');
+        }
+      })
+      .catch(function(){
+        if(listEl) listEl.innerHTML='<div id="wov-empty">Could not load vouchers.<br>Check connection.</div>';
+      });
+  };
+
+  /* ── Redeem voucher ── */
+  window._redeemVoucher = function(vid, amount) {
+    var n=_nick(); if(!n) return;
+    var listEl=_el('wov-list');
+    if(listEl) listEl.innerHTML='<div id="wov-empty">Redeeming\u2026</div>';
+    _sbFetch('vouchers?id=eq.'+vid, {
+      method:'PATCH', prefer:'return=minimal',
+      body:{status:'redeemed',redeemed_at:new Date().toISOString()}
+    })
+    .then(function(){
+      var _prev=S.bal;
+      S.bal+=parseFloat(amount);
+      opLog({type:'VOUCHER_REDEEM',voucherId:vid,amount:amount,balBefore:_prev,balAfter:S.bal});
+      updUI(); sndCreditsAddUp();
+      var ov=_el('wallet-ov'); if(ov) ov.classList.remove('on');
+      toast(_fmt(amount)+' LOADED FROM WALLET');
+    })
+    .catch(function(){
+      if(listEl) listEl.innerHTML='<div id="wov-empty">Redemption failed. Try again.</div>';
+    });
+  };
+
+  /* ── Cash Out → create voucher, update wallet balance, return to lobby ── */
+  window._doCashOutToWallet = function(amount, onDone) {
+    var n=_nick();
+    if(!n||typeof fetch==='undefined'){onDone(false);return;}
+    var newAmount=parseFloat(amount);
+    /* Step 1: insert voucher */
+    _sbFetch('vouchers',{
+      method:'POST',
+      body:{nickname:n,amount:newAmount,status:'available',source_game:'straypups_1d'}
+    })
+    .then(function(){
+      /* Step 2: fetch current wallet balance, then upsert with new total */
+      return _sbFetch('wallet?select=balance&nickname=eq.'+encodeURIComponent(n),{})
+        .then(function(wd){
+          var cur=wd&&wd[0]?parseFloat(wd[0].balance):0;
+          if(isNaN(cur))cur=0;
+          var newBal=cur+newAmount;
+          return _sbFetch('wallet',{
+            method:'POST',
+            prefer:'return=minimal',
+            headers:{'Prefer':'resolution=merge-duplicates,return=minimal'},
+            body:{nickname:n,balance:newBal}
+          });
+        });
+    })
+    .then(function(){ onDone(true); })
+    .catch(function(){ onDone(false); });
+  };
+
+  /* ── Wire close / backdrop tap ── */
+  document.addEventListener('DOMContentLoaded',function(){
+    var cb=_el('wov-close'); if(cb) cb.addEventListener('click',function(){_el('wallet-ov').classList.remove('on');});
+    var ov=_el('wallet-ov'); if(ov) ov.addEventListener('click',function(e){if(e.target===ov)ov.classList.remove('on');});
+  });
+
+}());
+
 /* -- INIT -- */
 /* Read player nickname from URL param (passed by Gold Coins Casino lobby) */
 (function(){
@@ -1841,8 +1995,32 @@ document.getElementById('cred-btn').addEventListener('click',function(){if(S.spi
 document.getElementById('max-btn').addEventListener('click',function(){if(S.spinning)return;S.cpl=3;updUI();setTimeout(doSpin,80);});
 document.getElementById('help-btn').addEventListener('click',function(){renderHelp();document.getElementById('help').classList.add('on');});
 document.getElementById('help-close').addEventListener('click',function(){document.getElementById('help').classList.remove('on');});
-  document.getElementById('co-btn').addEventListener('click',function(){if(S.spinning)return;if(S.bal<=0){toast('NOTHING TO CASH OUT');return;}var _coAmt=S.bal;toast('CASHING OUT '+fmt(_coAmt));S.bal=0;opLog({type:'CASH_OUT',amount:_coAmt,balBefore:_coAmt,balAfter:0});updUI();});
-document.getElementById('ic-btn').addEventListener('click',function(){if(S.spinning)return;document.getElementById('ic-ov').classList.add('on');});
+  document.getElementById('co-btn').addEventListener('click',function(){
+  if(S.spinning)return;
+  if(S.bal<=0){toast('NOTHING TO CASH OUT');return;}
+  var _coAmt=S.bal;
+  /* v6.3: save to virtual wallet as voucher, then zero balance */
+  window._doCashOutToWallet(_coAmt,function(ok){
+    S.bal=0;
+    opLog({type:'CASH_OUT',amount:_coAmt,balBefore:_coAmt,balAfter:0,walletSaved:ok});
+    updUI();
+    toast('CASHED OUT '+fmt(_coAmt)+(ok?' • SAVED TO WALLET':''));
+    /* Return to lobby after brief delay */
+    setTimeout(function(){
+      var _lobbyUrl='https://theturrellesisters.github.io/turrelle_gold_coins_casino/';
+      try{
+        var _ref=document.referrer;
+        if(_ref&&_ref.indexOf('theturrellesisters.github.io')!==-1)_lobbyUrl=_ref;
+      }catch(e){}
+      window.location.href=_lobbyUrl;
+    },2200);
+  });
+});
+document.getElementById('ic-btn').addEventListener('click',function(){
+  if(S.spinning)return;
+  /* v6.3: open virtual wallet overlay instead of local insert */
+  window._openWalletOv();
+});
 document.getElementById('ic-ok').addEventListener('click',function(){var v=parseFloat(document.getElementById('ic-inp').value);if(v>0&&v<=9999){var _ciBal=S.bal;S.bal+=v;opLog({type:'CASH_IN',amount:v,balBefore:_ciBal,balAfter:S.bal});updUI();toast(fmt(v)+' ADDED');sndCreditsAddUp();}document.getElementById('ic-ov').classList.remove('on');});
 document.getElementById('ic-no').addEventListener('click',function(){document.getElementById('ic-ov').classList.remove('on');});
 document.querySelectorAll('.icpre').forEach(function(btn){btn.addEventListener('click',function(){var a=parseFloat(btn.getAttribute('data-a'));var _ciBalP=S.bal;S.bal+=a;opLog({type:'CASH_IN',amount:a,balBefore:_ciBalP,balAfter:S.bal});updUI();toast(fmt(a)+' ADDED');sndCreditsAddUp();document.getElementById('ic-ov').classList.remove('on');});});

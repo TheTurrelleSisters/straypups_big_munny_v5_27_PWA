@@ -2440,3 +2440,72 @@ Game-specific differences to verify per repo:
 5. Package all three games in one zip delivery
 6. Update this phase plan after delivery with confirmed results
 
+
+---
+
+## v6.1 — Two Reel Symbol Bugs Fixed
+
+### Bug #1 — WABC race condition: phantom reel spin on cancelled first spin
+
+**Root cause:** `doBingoSpin()` returned `[]` (empty array) when WABC was unavailable.
+The bail-out path inside `doBingoSpin` correctly refunded the bet and re-enabled
+controls (`S.spinning=false; S.bal+=S.cpl; setCtrl(true)`). However, `doSpin()`
+called `_continueSpinAfterClaim()` unconditionally after `doBingoSpin()` returned —
+with no way to distinguish "bail out" from "no bingo win". The continuation then ran
+the no-win path (`genSpinResult()` → `animateReels()`), firing a phantom reel
+animation on a cancelled, already-refunded spin. Controls were also re-enabled a
+second time by `animateReels`' callback. On the very next spin (with WABC now
+connected), the game behaved correctly — making spin #1 feel broken and spin #2 feel
+like the "real" first spin.
+
+**Fix:**
+- `doBingoSpin()` bail-out returns `null` instead of `[]`
+- `doSpin()` checks `if(winPatterns===null) return;` before calling `_continueSpinAfterClaim()`
+- `[]` (empty array) remains the correct return for "no bingo win" — no other callers affected
+
+**Files changed:** `js/game.js`
+
+---
+
+### Bug #2 — `REEL_SYMS['none']` = `[4,2,3]` (three bars) — showed win-looking reels on Cover All 40
+
+**Root cause:** `REEL_SYMS['none']` was `[4,2,3]` (1Bar + 3Bar + 2Bar). This key is
+used in `_continueSpinAfterClaim()` when `_reelPats` (reel-bearing patterns) is empty
+but `winPatterns` is not — the only real case being Cover All 40 (which has `reel:null`
+and is excluded from `_reelPats`). `forcedSpinResult([4,2,3])` shuffles three bars in
+any order — all permutations pass `evalSpin`'s mixed-bar check (`isBar(L[0]) &&
+isBar(L[1]) && isBar(L[2])`) → `{amt:1}` (win-looking). Forced spin results bypass the
+`evalSpin` rejection loop (only no-win spins run that filter), so the reels always
+showed 3 bars for a $0.01 Cover All event — visually indistinguishable from a
+Small Diamond or mixed-bar pattern win.
+
+**Fix:** Changed `REEL_SYMS['none']` from `[4,2,3]` to `[6,4,6]` (BLK / 1Bar / BLK).
+A blank on the payline causes `evalSpin` to return `{amt:0}` — non-win-looking, which
+is the correct visual for a $0.01 sequence-reset event. The cover-all penny credit and
+new sequence logic are unaffected.
+
+**Files changed:** `js/paytable.js`
+
+---
+
+### Statistical analysis note (not a bug — documented for record)
+
+200,000-spin Monte Carlo simulation confirmed overall RTP at ~106% (bet $1 level).
+This is known and intentional for the current phase. No pay table or `balls` values
+were changed in this delivery. A full Monte Carlo recalibration pass is deferred to
+a future phase per owner direction.
+
+---
+
+### Version bump
+| File | Change |
+|------|--------|
+| `service-worker.js` | `CACHE = 'spbm-v610'` |
+| `index.html` | title, splash-ver, all `?v=` → `v6.1` |
+
+### Verification checklist
+- [ ] On first load: dismiss splash early (within 1s) → Spin → confirm NO phantom reel animation fires, toast "Ball call unavailable" shows, balance unchanged
+- [ ] After WABC connects: Spin → confirm normal reel animation and bingo result
+- [ ] Induce Cover All 40 (dev: set card to match first 40 balls) → confirm reels show blank/bar/blank, NOT 3 bars; penny credited; toast fires
+- [ ] No-win spin → confirm evalSpin still rejects win-looking combos (cherry, wild, 3oak, mixed-bar) — not broken by paytable change
+- [ ] `node --check js/game.js js/paytable.js` — clean

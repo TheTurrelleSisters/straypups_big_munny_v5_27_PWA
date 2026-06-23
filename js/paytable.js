@@ -113,7 +113,11 @@ var REEL_SYMS = {
   'coverall': [7,7,7],   /* JP + JP + JP → Lazy-T Progressive Jackpot */
 
   /* ── No-win ── */
-  'none'    : [4,2,3]    /* 1B + 3B + 2B → non-paying stop */
+  /* v6.1 FIX: was [4,2,3] (three bars) — evalSpin mixed-bar check flagged that
+     as win-looking, so Cover All 40 (reel:null → _reelPats=[] → 'none') showed
+     3 bars on the payline for a $0.01 event. [6,4,6] (BLK/1Bar/BLK) has a blank
+     on the payline so evalSpin returns {amt:0} — correctly non-win-looking. */
+  'none'    : [6,4,6]    /* BLK + 1B + BLK → non-win stop (blank guards) */
 };
 
 /* ── 5. WIN HIERARCHY RULES ─────────────────────────────────────────────────

@@ -2509,3 +2509,19 @@ a future phase per owner direction.
 - [ ] Induce Cover All 40 (dev: set card to match first 40 balls) → confirm reels show blank/bar/blank, NOT 3 bars; penny credited; toast fires
 - [ ] No-win spin → confirm evalSpin still rejects win-looking combos (cherry, wild, 3oak, mixed-bar) — not broken by paytable change
 - [ ] `node --check js/game.js js/paytable.js` — clean
+
+---
+
+## v6.4 — Messaging system migration + broadcast_messages removal
+
+### Changes
+- `js/paytable.js`: `REEL_SYMS['coverall']` renamed to `'lazyt'`; Lazy-T pattern `reel:'coverall'` → `reel:'lazyt'`; comment corrected to "25 balls drawn (24 called + free space)"
+- `js/game.js`: `REEL_SYMS['coverall']` → `REEL_SYMS['lazyt']`; Red Spin comment updated
+- `js/progressive.js`: Removed `broadcast_messages` subscription system (`_messageListeners`, `_lastSeenMessageId`, `_SEEN_KEY`, `_loadLastSeen`, `_saveLastSeen`, `_notifyMessage`, `_subscribeMessages`, `_checkUnreadMessages`, `onMessage`). Added operator inbox system: `_subscribeOpMessages()`, `_loadOpMessages()`, `onOpMessage()` reading from `public.messages`
+- `index.html`: Added `op-msg-subject` element to banner HTML; `showNextMessage()` renders subject + icon + body; `Progressive.onMessage` wire replaced by `Progressive.onOpMessage`; all `?v=` → `6.4`
+
+### Version bump
+| File | Change |
+|------|--------|
+| `service-worker.js` | `CACHE = 'spbm-v640'` |
+| `index.html` | title, splash-ver, all `?v=` → `6.4` |

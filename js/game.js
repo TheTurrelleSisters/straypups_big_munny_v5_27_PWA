@@ -950,7 +950,7 @@ function _clearSpinWatchdog(){
 }
 
 function setCtrl(en){
-  var ids=['spin-btn','cred-btn','max-btn','co-btn','ic-btn','lobby-btn'];
+  var ids=['spin-btn','cred-btn','max-btn','co-btn','ic-btn','help-btn'];
   for(var i=0;i<ids.length;i++) document.getElementById(ids[i]).disabled=!en;
 }
 function toast(m){var el=document.getElementById('toast');el.textContent=m;el.classList.add('on');setTimeout(function(){el.classList.remove('on');},2600);}
@@ -1229,8 +1229,8 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
       setTimeout(function(){
       var payAmt=pat.pay[cpl-1];
       if(pat.isProgressive&&progCtx){
-        /* Progressive Jackpot — grand finale. Reels already show 'coverall'
-           symbols (just landed). Add accumulated bonusTotal + jackpot amount,
+        /* Progressive Jackpot — grand finale. Reels already show 3× JP
+           (Lazy-T reel stop). Add accumulated bonusTotal + jackpot amount,
            then hand off to showProgJP. This ends the sequence — no further
            playNext/onDone call. */
         frame2.classList.remove('bonus-active');
@@ -1387,7 +1387,7 @@ function doSpin(){
       /* Progressive: main reels show 3x JP symbol.
          Non-progressive: lowest reel-bearing pattern drives main reels.
          Cover All alone (no reel patterns): non-winning combo on reels. */
-      spinData=forcedSpinResult(_progInWins?REEL_SYMS['coverall']:(_reelPats.length>0?(REEL_SYMS[_reelPats[0].reel]||REEL_SYMS['none']):REEL_SYMS['none']));
+      spinData=forcedSpinResult(_progInWins?REEL_SYMS['lazyt']:(_reelPats.length>0?(REEL_SYMS[_reelPats[0].reel]||REEL_SYMS['none']):REEL_SYMS['none']));
     }
 
     animateReels(spinData,function(){
@@ -1993,15 +1993,8 @@ document.getElementById('spin-btn').addEventListener('touchend',function(e){e.pr
 document.addEventListener('keydown',function(e){if(e.code==='Space'||e.code==='Enter'){e.preventDefault();doSpin();}});
 document.getElementById('cred-btn').addEventListener('click',function(){if(S.spinning)return;var i=CPL.indexOf(S.cpl);S.cpl=CPL[(i+1)%CPL.length];updUI();});
 document.getElementById('max-btn').addEventListener('click',function(){if(S.spinning)return;S.cpl=3;updUI();setTimeout(doSpin,80);});
-document.getElementById('lobby-btn').addEventListener('click',function(){
-  /* v6.4: navigate back to Gold Coins Casino lobby */
-  var _lobbyUrl='https://theturrellesisters.github.io/turrelle_gold_coins_casino/';
-  try{
-    var _ref=document.referrer;
-    if(_ref&&_ref.indexOf('theturrellesisters.github.io')!==-1)_lobbyUrl=_ref;
-  }catch(e){}
-  window.location.href=_lobbyUrl;
-});
+document.getElementById('help-btn').addEventListener('click',function(){renderHelp();document.getElementById('help').classList.add('on');});
+document.getElementById('help-close').addEventListener('click',function(){document.getElementById('help').classList.remove('on');});
   document.getElementById('co-btn').addEventListener('click',function(){
   if(S.spinning)return;
   if(S.bal<=0){toast('NOTHING TO CASH OUT');return;}

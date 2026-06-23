@@ -2585,3 +2585,29 @@ commands armed while the player is mid-session.
 |------|--------|
 | `service-worker.js` | `CACHE = 'spbm-v670'` |
 | `index.html` | title, splash-ver, all `?v=` → `6.7` |
+
+---
+
+## v6.4 — coverall → lazyt rename + Lazy-T comment fix
+- `js/paytable.js`: `REEL_SYMS['coverall']` → `'lazyt'`; Lazy-T `reel:'coverall'` → `reel:'lazyt'`; comment corrected to "25 balls drawn (24 called + free space)"
+- `js/game.js`: `REEL_SYMS['coverall']` → `REEL_SYMS['lazyt']`; Red Spin comment updated
+- Cache: `spbm-v640`
+
+## v6.5 — Trigger 2: server-side threshold + guaranteed Lazy-T card
+- `js/progressive.js`: Added `isForceArmed()` accessor
+- `js/game.js`: Added `_genGuaranteedLazyTCard(callSeq)` + Trigger 2 check in `doBingoSpin()`
+- DB: `trigger2_migration.sql` — `must_hit_by` column, `progressive_random_threshold()`, `fn_progressive_threshold_check()` trigger, `progressive_hit()` RPC
+- Cache: `spbm-v650`
+
+## v6.6 — CRITICAL FIX: _checkArmedCommand on connect
+- `js/progressive.js`: Added `_checkArmedCommand()` — polls `progressive_commands` for existing armed rows on connect and every 30s. Fixed bug where clients connecting after arm event missed `_forceArmed` entirely.
+- Cache: `spbm-v660`
+
+## v6.7 — Race condition fix: tryAtomicClaim + _continueDoBingoSpin
+- `js/progressive.js`: Added `tryAtomicClaim(onResult)` — atomically pre-claims armed command before guaranteed card generation. Only one client wins the race; all others spin normally.
+- `js/game.js`: Trigger 2 now calls `Progressive.tryAtomicClaim()` async. Added `_continueDoBingoSpin(prevBallPos)` to support async path.
+- Cache: `spbm-v670`
+
+## v6.8 — CRITICAL FIX: service-worker non-fatal pre-cache
+- `service-worker.js`: Added `.catch()` to `c.addAll(FILES)` — a 404 on any asset (GitHub Pages) no longer hard-fails SW install and blocks game load. Pre-cache failures are now logged as warnings only.
+- Cache: `spbm-v680`

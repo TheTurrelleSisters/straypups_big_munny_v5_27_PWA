@@ -2571,3 +2571,17 @@ commands armed while the player is mid-session.
 |------|--------|
 | `service-worker.js` | `CACHE = 'spbm-v660'` |
 | `index.html` | title, splash-ver, all `?v=` → `6.6` |
+
+---
+
+## 6.7 — Race condition fix + operator UI redesign
+
+### Changes
+- `js/progressive.js`: Added `tryAtomicClaim(onResult)` — atomically pre-claims armed `progressive_commands` row before guaranteed Lazy-T card is generated. Only one client can succeed; all others fall back to normal card. Prevents multiple simultaneous guaranteed Lazy-T wins.
+- `js/game.js`: Trigger 2 check now calls `Progressive.tryAtomicClaim()` async before card generation. Added `_continueDoBingoSpin(prevBallPos)` to support the async path — extracts post-card evaluation logic so the spin can resume after the DB round-trip.
+
+### Version bump
+| File | Change |
+|------|--------|
+| `service-worker.js` | `CACHE = 'spbm-v670'` |
+| `index.html` | title, splash-ver, all `?v=` → `6.7` |

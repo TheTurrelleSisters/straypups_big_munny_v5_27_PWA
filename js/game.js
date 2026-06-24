@@ -192,6 +192,24 @@ var BG={
 };
 var COL_RANGES=[[1,15],[16,30],[31,45],[46,60],[61,75]];
 
+/* ── RED SPIN CARD LOCK ─────────────────────────────────────────────────────
+   When a multi-pattern bingo win triggers Red Spin, the winning card state
+   must remain frozen for the entire Red Spin sequence — exactly as on a
+   real VGT machine. A new WABC ball sequence arriving near ball 75 would
+   otherwise overwrite BG.card/BG.callSeq/BG.matchedCells mid-celebration,
+   causing Red Spin to render pattern highlights on the wrong card.
+
+   _rsCardLocked  : true while Red Spin (or progressive finale) is in flight.
+   _rsCardSnapshot: atomic copy of {card,callSeq,matchedCells,cardNumSet}
+                    taken at spin-result time (before the 600ms pre-RS delay).
+                    runRS and showProgJP use this, never live BG.*
+   _pendingNewSeq : new WABC sequence absorbed while locked; applied to BG
+                    at the moment the lock releases (end of Red Spin / onDone).
+   ─────────────────────────────────────────────────────────────────────────── */
+var _rsCardLocked   = false;
+var _rsCardSnapshot = null;
+var _pendingNewSeq  = null;
+
 function cardFingerprint(card){
   // Compact string of all 24 numbers in order (null=0)
   var parts=[];
@@ -729,6 +747,17 @@ function _requestNewWABCSequence() {
       if(typeof WABC !== 'undefined' && WABC.applyLocalNewCall) {
         WABC.applyLocalNewCall(_newSeq, _newIAt);
       }
+      /* v6.4 RS CARD LOCK: if Red Spin is in progress, absorb the new
+         sequence silently — do NOT overwrite BG.card/callSeq/matchedCells.
+         _releaseRsCardLock() will apply it when the lock is released. */
+      if (_rsCardLocked) {
+        _pendingNewSeq = { seq: _newSeq, issuedAt: _newIAt };
+        BG.awaitingNewSeq   = false;
+        BG.seqExhausted     = false;
+        BG._coverAll75Fired = false;
+        updateBallCallBadge();
+        return;
+      }
       BG.callSeq = _newSeq;
       BG.ballPos = 40;
       BG.usingServerBalls = true;
@@ -1043,7 +1072,10 @@ function _refreshSpinWatchdog(){
   _spinWatchdog=setTimeout(function(){
     if(S.spinning){
       console.warn('[Watchdog] Spin stuck >15s — force unlocking');
-      _spinWatchdog=null; S.spinning=false; setCtrl(true); updUI();
+      _spinWatchdog=null;
+      /* v6.4: release card lock if watchdog fires during Red Spin */
+      _releaseRsCardLock();
+      S.spinning=false; setCtrl(true); updUI();
       var cel=document.getElementById('force-win-cel');
       if(cel) cel.classList.remove('show');
     }
@@ -1069,6 +1101,59 @@ function setCtrl(en){
   var ids=['spin-btn','cred-btn','max-btn','co-btn','ic-btn','help-btn'];
   for(var i=0;i<ids.length;i++) document.getElementById(ids[i]).disabled=!en;
 }
+/* ── RED SPIN CARD LOCK HELPERS ─────────────────────────────────────────────
+   _acquireRsCardLock()  — snapshot BG state, raise lock flag.
+                           Call once when winPatterns.length > 0 is confirmed,
+                           before the 600ms pre-RS setTimeout fires.
+   _releaseRsCardLock()  — lower lock flag, apply any pending new sequence,
+                           clear snapshot.
+                           Call at the end of every Red Spin / prog finale path
+                           (just before S.spinning=false / setCtrl(true)).
+   ─────────────────────────────────────────────────────────────────────────── */
+function _acquireRsCardLock() {
+  _rsCardLocked = true;
+  /* Deep-copy only the fields runRS needs; everything else can still live. */
+  var snapCard = BG.card.slice();
+  var snapCallSeq = BG.callSeq.slice();
+  var snapMatched = {};
+  var _mk = Object.keys(BG.matchedCells);
+  for (var _mi = 0; _mi < _mk.length; _mi++) snapMatched[_mk[_mi]] = true;
+  var snapNumSet = {};
+  var _nk = Object.keys(BG.cardNumSet);
+  for (var _ni = 0; _ni < _nk.length; _ni++) snapNumSet[_nk[_ni]] = BG.cardNumSet[_nk[_ni]];
+  _rsCardSnapshot = {
+    card:         snapCard,
+    callSeq:      snapCallSeq,
+    matchedCells: snapMatched,
+    cardNumSet:   snapNumSet
+  };
+}
+
+function _releaseRsCardLock() {
+  _rsCardLocked   = false;
+  _rsCardSnapshot = null;
+  /* Apply any new WABC sequence that arrived while locked */
+  if (_pendingNewSeq) {
+    var _pSeq = _pendingNewSeq.seq;
+    _pendingNewSeq = null;
+    BG.callSeq          = _pSeq;
+    BG.ballPos          = 40;
+    BG.usingServerBalls = true;
+    BG.seqExhausted     = false;
+    BG.awaitingNewSeq   = false;
+    BG._coverAll75Fired = false;
+    /* Re-daub current card against new sequence for next spin */
+    if (BG.card && Object.keys(BG.cardNumSet).length > 0) {
+      BG.matchedCells = {12: true};
+      for (var _ri = 0; _ri < 40; _ri++) {
+        var _rb = _pSeq[_ri];
+        if (BG.cardNumSet[_rb] !== undefined) BG.matchedCells[BG.cardNumSet[_rb]] = true;
+      }
+    }
+    updateBallCallBadge();
+  }
+}
+
 function toast(m){var el=document.getElementById('toast');el.textContent=m;el.classList.add('on');setTimeout(function(){el.classList.remove('on');},2600);}
 function setWin(a,lbl){
   var el=document.getElementById('wval');
@@ -1338,9 +1423,13 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
       console.log('[RedSpin] _onReelDone called, rsDone='+rsDone);
       if(rsDone<3) return; /* wait for all 3 reels to finish */
       /* Reveal pattern name + card highlight NOW — exactly as 3rd reel lands.
-         Player sees the result at the moment of stop, not before the spin. */
+         Player sees the result at the moment of stop, not before the spin.
+         v6.4: use _rsCardSnapshot (winning card state) not live BG.card —
+         BG may have been replaced by a new WABC sequence mid-Red-Spin. */
       if(_pnEl) _pnEl.textContent=pat.name.toUpperCase();
-      renderBingoCard(BG.card,BG.matchedCells,pat.cells);
+      var _rsCard    = (_rsCardSnapshot ? _rsCardSnapshot.card         : BG.card);
+      var _rsMatched = (_rsCardSnapshot ? _rsCardSnapshot.matchedCells : BG.matchedCells);
+      renderBingoCard(_rsCard, _rsMatched, pat.cells);
       console.log('[RedSpin] All 3 reels done, firing 120ms callback');
       setTimeout(function(){
       var payAmt=pat.pay[cpl-1];
@@ -1369,6 +1458,7 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
             console.error('[Progressive] showProgJP threw — recovering controls:', e);
             var _cel=document.getElementById('force-win-cel');
             if(_cel) _cel.classList.remove('show');
+            _releaseRsCardLock();
             S.spinning=false; setCtrl(true); updUI();
           }
         },500);
@@ -1403,6 +1493,7 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
             console.error('[RedSpin] showJP threw — recovering controls:', e);
             var _jpov=document.getElementById('jp-ov');
             if(_jpov) _jpov.classList.remove('on');
+            _releaseRsCardLock();
             S.spinning=false; setCtrl(true); updUI();
           }
         },500);return;
@@ -1579,6 +1670,10 @@ function doSpin(){
       if(baseAmt>=50) sndBigWin(); else sndSmallWin();
 
       if(rsPatterns.length>0){
+        /* v6.4: Snapshot winning card state NOW — before the 600ms delay —
+           so any new WABC sequence arriving in that window is absorbed by
+           _pendingNewSeq instead of overwriting BG.card/matchedCells. */
+        _acquireRsCardLock();
         startPatternCycle([basePat]);
         setTimeout(function(){
           stopPatternCycle();
@@ -1587,6 +1682,7 @@ function doSpin(){
             document.getElementById('bt-box').classList.remove('on');
             startPatternCycle(winPatterns);
             opLog({type:'SPIN',gameSerial:genGameSerial(),cardSerial:_spinCardSerial,bet:S.cpl,win:baseAmt+bonusTotal,patterns:winPatterns.map(function(p){return p.name;}),balBefore:_spinBalBefore,balAfter:S.bal});
+            _releaseRsCardLock();
             _spinDebounce=Date.now();updUI();_clearSpinWatchdog();S.spinning=false;setCtrl(true);
           });
         },600);return;
@@ -1656,6 +1752,8 @@ function _finishProgressiveSpin(progAmt, winPatterns, basePat, cardSerial, balBe
   var rsSeq=_progPat?[_progPat]:[basePat];
 
   startPatternCycle([basePat]);
+  /* v6.4: Snapshot winning card state NOW — same timing as normal Red Spin path */
+  _acquireRsCardLock();
   setTimeout(function(){
     stopPatternCycle();
     runRS(rsSeq,S.cpl,function(){ /* unused — Progressive entry ends the sequence */ },
@@ -1712,7 +1810,10 @@ function showProgJP(progAmt, winPatterns, cardSerial, balBefore) {
       }
     }
     var _allCellArr = Object.keys(_allWinCells).map(Number);
-    renderBingoCard(BG.card, BG.matchedCells, _allCellArr);
+    /* v6.4: use snapshot card if still locked, else live BG */
+    var _pgCard    = (_rsCardSnapshot ? _rsCardSnapshot.card         : BG.card);
+    var _pgMatched = (_rsCardSnapshot ? _rsCardSnapshot.matchedCells : BG.matchedCells);
+    renderBingoCard(_pgCard, _pgMatched, _allCellArr);
     startPatternCycle(winPatterns);
 
     opLog({type:'SPIN', gameSerial:genGameSerial(), cardSerial:cardSerial,
@@ -1732,6 +1833,8 @@ function showProgJP(progAmt, winPatterns, cardSerial, balBefore) {
 
     _spinDebounce = Date.now();
     (function(){if(_spinWatchdog){clearTimeout(_spinWatchdog);_spinWatchdog=null;}})();
+    /* v6.4: release card lock — applies any pending new WABC sequence */
+    _releaseRsCardLock();
     S.spinning = false; setCtrl(true); updUI();
   }
   if (dismissBtn) {
@@ -1845,6 +1948,18 @@ function initProgressiveMeter(){
            actively viewing. Win highlights remain visible until the next Spin press (Q3). */
         WABC.onNewCall(function(newSeq) {
           if(!newSeq||newSeq.length!==75) return;
+          /* v6.4 RS CARD LOCK: if Red Spin is in progress, absorb silently.
+             Update WABC internal state flags but do NOT touch BG.card,
+             BG.matchedCells, or render anything.
+             _releaseRsCardLock() applies the pending seq when lock releases. */
+          if (_rsCardLocked) {
+            _pendingNewSeq = { seq: newSeq, issuedAt: null };
+            BG.awaitingNewSeq   = false;
+            BG.seqExhausted     = false;
+            BG._coverAll75Fired = false;
+            updateBallCallBadge();
+            return;
+          }
           BG.callSeq = newSeq;
           BG.ballPos = 40;
           BG.usingServerBalls = true;

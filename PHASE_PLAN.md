@@ -2638,3 +2638,65 @@ commands armed while the player is mid-session.
 
 **Files changed:** `js/game.js`
 - Cache: `spbm-v6110`
+
+---
+
+## v6.12 — FIX: Winning Bingo Card Replaced by New WABC Sequence Mid-Red Spin
+
+**Bug (deferred since v5.115):** When a multi-pattern bingo win triggered Red Spin near
+ball 75 (sequence boundary), a new WABC sequence arrived mid-celebration via
+`WABC.onNewCall` or `_requestNewWABCSequence`. Both handlers overwrote `BG.card`,
+`BG.callSeq`, `BG.matchedCells`, and `BG.cardNumSet` in place. `runRS` then called
+`renderBingoCard(BG.card, BG.matchedCells, pat.cells)` — but `BG.card` was now a
+completely different card (different numbers) daubed against the new sequence. Pattern
+highlight cells pointed at the wrong positions. Players saw the Red Spin play out on a
+card they had never seen, with daubs and highlights that made no sense.
+
+**Root cause:** No lock existed to protect the winning card state during the Red Spin
+sequence. The v6.2 `S.spinning` guard in `_onServerBallPos` only blocked
+`renderBingoCard` (ball strip kept ticking — correct), but it did NOT prevent the
+new-sequence handlers from overwriting the `BG` object itself.
+
+**Fix — Atomic Win Snapshot + Red Spin Card Lock (`game.js` only):**
+
+1. **Three new module-level vars:**
+   - `_rsCardLocked`   — boolean flag, true while Red Spin / prog finale is in flight
+   - `_rsCardSnapshot` — deep copy of `{card, callSeq, matchedCells, cardNumSet}` taken
+                         at win-result time (before the 600ms pre-RS delay)
+   - `_pendingNewSeq`  — new WABC sequence absorbed while locked; applied on release
+
+2. **`_acquireRsCardLock()`** — sets flag, deep-copies BG card state into snapshot.
+   Called at the moment `winPatterns.length > 0` is confirmed, before the 600ms
+   pre-RS setTimeout in both the normal Red Spin path and `_finishProgressiveSpin`.
+
+3. **`_releaseRsCardLock()`** — clears flag and snapshot; if `_pendingNewSeq` is set,
+   applies it to BG (re-daubing current card against new sequence) and clears it.
+   Called at every terminal path before `S.spinning = false / setCtrl(true)`:
+   - Normal RS `onDone` callback
+   - `showProgJP` `onDismiss`
+   - `showJP` catch block (error recovery)
+   - `showProgJP` catch block (error recovery)
+   - Spin watchdog recovery (15s timeout)
+
+4. **New-sequence handlers guarded:** `_requestNewWABCSequence` success callback and
+   `WABC.onNewCall` handler both check `_rsCardLocked` first. If locked, new sequence
+   is stored in `_pendingNewSeq`, BG flags are updated (awaitingNewSeq, seqExhausted,
+   _coverAll75Fired), and the handler returns without touching BG.card or rendering.
+   Ball strip continues updating live via `_onServerBallPos` — unchanged (Q2-A design).
+
+5. **`runRS` uses snapshot:** `renderBingoCard` call inside `_onReelDone` switched from
+   `BG.card / BG.matchedCells` to `_rsCardSnapshot.card / _rsCardSnapshot.matchedCells`.
+
+6. **`showProgJP` uses snapshot:** `renderBingoCard` in `onDismiss` full-card daub also
+   switched to use snapshot (lock is still held at that point; released immediately after).
+
+**Design preserved:**
+- Ball strip keeps ticking live during Red Spin (server position authoritative) ✓
+- Card numbers and daubs stay frozen until Red Spin ends ✓
+- New sequence absorbed silently and applied cleanly the moment lock releases ✓
+- No changes to `paytable.js`, `config.js`, `wabc.js`, `progressive.js` ✓
+- Full ES5 — no arrow functions, const/let, or backticks ✓
+
+**Files changed:** `js/game.js`
+- Cache: `spbm-v6120`
+- index.html: title, splash-ver, all `?v=` → `v6.12`

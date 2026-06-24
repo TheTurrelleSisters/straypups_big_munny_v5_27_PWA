@@ -210,6 +210,24 @@ var _rsCardLocked   = false;
 var _rsCardSnapshot = null;
 var _pendingNewSeq  = null;
 
+/* ── WIN CELEBRATION CARD LOCK ──────────────────────────────────────────────
+   After any winning spin (Red Spin or plain win), startPatternCycle() freezes
+   the winning card display until the player presses Spin again.
+
+   _celebCardLocked  : true while the win celebration cycle is running.
+   _celebCardSnapshot: frozen copy of {card, matchedCells} taken at the moment
+                       startPatternCycle() is called. showNext() uses this
+                       snapshot — never live BG — so a new WABC sequence
+                       resetting BG.matchedCells cannot affect the display.
+
+   _onServerBallPos continues to daub BG.matchedCells in the background
+   (card stays silently current for next spin) but renderBingoCard is
+   suppressed while locked. Ball strip keeps updating live — unchanged.
+   Lock releases in stopPatternCycle(), which runs at top of doBingoSpin().
+   ─────────────────────────────────────────────────────────────────────────── */
+var _celebCardLocked   = false;
+var _celebCardSnapshot = null;
+
 function cardFingerprint(card){
   // Compact string of all 24 numbers in order (null=0)
   var parts=[];
@@ -511,11 +529,23 @@ function startPatternCycle(winPatterns){
     document.getElementById('bingo-pattern-name').textContent='\u00a0';
     return;
   }
+  /* v6.13: Freeze the winning card state NOW — before any new WABC sequence
+     can reset BG.matchedCells. showNext uses this snapshot for the entire
+     celebration, so new-sequence daub resets cannot affect the display.
+     BG.matchedCells still gets updated in the background by _onServerBallPos
+     (silently keeping the card current for the next spin press). */
+  var _snapCard = BG.card.slice();
+  var _snapMatched = {};
+  var _smk = Object.keys(BG.matchedCells);
+  for(var _smi=0;_smi<_smk.length;_smi++) _snapMatched[_smk[_smi]]=true;
+  _celebCardSnapshot = {card:_snapCard, matchedCells:_snapMatched};
+  _celebCardLocked = true;
+
   BG.cycleIdx=0;
   function showNext(){
     var pat=winPatterns[BG.cycleIdx%winPatterns.length];
     document.getElementById('bingo-pattern-name').textContent=pat.name.toUpperCase();
-    renderBingoCard(BG.card,BG.matchedCells,pat.cells);
+    renderBingoCard(_celebCardSnapshot.card,_celebCardSnapshot.matchedCells,pat.cells);
     BG.cycleIdx++;
   }
   showNext();
@@ -525,6 +555,9 @@ function startPatternCycle(winPatterns){
 function stopPatternCycle(){
   if(BG.patternCycle){clearInterval(BG.patternCycle);BG.patternCycle=null;}
   document.getElementById('bingo-pattern-name').textContent='\u00a0';
+  /* v6.13: release celebration card lock */
+  _celebCardLocked   = false;
+  _celebCardSnapshot = null;
 }
 
 
@@ -637,12 +670,12 @@ function _onServerBallPos(newPos){
       BG.matchedCells[BG.cardNumSet[_bball]]=true;
   }
 
-  /* Gate: never overwrite the card during Red Spin or any active spin.
-     runRS sets pattern highlights on the card as each reel stops — a
-     server ball-pos event mid-Red Spin must not wipe those highlights
-     by re-rendering with winPatternCells=null. The ball strip can still
-     update (server position is authoritative for the strip display). */
-  if(GS.state==='active'&&!S.spinning){
+  /* Gate: never overwrite the card during Red Spin, any active spin, or win
+     celebration cycle. runRS sets pattern highlights on the card as each reel
+     stops; startPatternCycle holds the frozen win state until next Spin press.
+     A server ball-pos event must not wipe those highlights by re-rendering
+     with winPatternCells=null. Ball strip can still update live. */
+  if(GS.state==='active' && !S.spinning && !_celebCardLocked){
     renderBingoCard(BG.card,BG.matchedCells,null);
   }
   renderBallStrip(BG.callSeq,BG.ballPos,BG.cardNumSet);
@@ -771,7 +804,7 @@ function _requestNewWABCSequence() {
           if(BG.cardNumSet[_ncball]!==undefined)
             BG.matchedCells[BG.cardNumSet[_ncball]]=true;
         }
-        if(GS.state==='active'){
+        if(GS.state==='active' && !_celebCardLocked){
           renderBingoCard(BG.card,BG.matchedCells,null);
         }
         renderBallStrip(BG.callSeq,40,BG.cardNumSet);
@@ -1915,8 +1948,8 @@ function initProgressiveMeter(){
               if(BG.cardNumSet[_iball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_iball]]=true;
             }
-            /* Don't overwrite showcase pattern during idle */
-            if(GS.state==='active'){
+            /* Don't overwrite showcase pattern during idle or win celebration */
+            if(GS.state==='active' && !_celebCardLocked){
               renderBingoCard(BG.card,BG.matchedCells,null);
             }
           }
@@ -1980,7 +2013,10 @@ function initProgressiveMeter(){
               if(BG.cardNumSet[_ncball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_ncball]]=true;
             }
-            renderBingoCard(BG.card,BG.matchedCells,null);
+            /* v6.13: suppress card render during win celebration — snapshot holds display */
+            if(!_celebCardLocked){
+              renderBingoCard(BG.card,BG.matchedCells,null);
+            }
             renderBallStrip(BG.callSeq,40,BG.cardNumSet);
           } else if(GS.state!=='active') {
             clearBallStrip();
@@ -2001,8 +2037,8 @@ function initProgressiveMeter(){
               if(BG.cardNumSet[_rwball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_rwball]]=true;
             }
-            /* Do not re-render card during spin/Red Spin — pattern highlights locked. */
-            if(GS.state==='active'&&!S.spinning){
+            /* Do not re-render card during spin/Red Spin/win celebration — pattern highlights locked. */
+            if(GS.state==='active' && !S.spinning && !_celebCardLocked){
               renderBingoCard(BG.card,BG.matchedCells,null);
             }
             renderBallStrip(BG.callSeq,40,BG.cardNumSet);

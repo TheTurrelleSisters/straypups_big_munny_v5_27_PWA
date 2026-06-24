@@ -2700,3 +2700,54 @@ new-sequence handlers from overwriting the `BG` object itself.
 **Files changed:** `js/game.js`
 - Cache: `spbm-v6120`
 - index.html: title, splash-ver, all `?v=` → `v6.12`
+
+---
+
+## v6.13 — FIX: Win Celebration Card Re-Daubed by New WABC Sequence
+
+**Bug:** On a normal (non-Red Spin) win near ball 75, the win celebration pattern
+cycle (`startPatternCycle`) was rendering from live `BG.card` / `BG.matchedCells`.
+When the new WABC sequence arrived, `BG.matchedCells` was reset to `{12:true}` and
+re-daubed against the new sequence. The next `showNext` tick rendered the winning
+pattern highlight on cells that no longer matched — showing the pattern on non-winning
+cells. Simultaneously `_onServerBallPos` called `renderBingoCard(BG.card,
+BG.matchedCells, null)` against the reset daub state, causing a visible flash to a
+nearly-blank card.
+
+**Root cause:** `startPatternCycle`'s `showNext` closure captured live `BG` references
+with no snapshot protection. The `!S.spinning` gate in `_onServerBallPos` only blocked
+`renderBingoCard` during Red Spin — `S.spinning` is cleared immediately when a plain
+win celebration starts, leaving `_onServerBallPos` free to overwrite the card.
+
+**Fix — Win Celebration Card Lock (`game.js` only):**
+
+1. **Two new module-level vars** added alongside the RS card lock block:
+   - `_celebCardLocked`   — true while the win celebration cycle is running
+   - `_celebCardSnapshot` — frozen `{card, matchedCells}` copy taken at
+                            `startPatternCycle` call time
+
+2. **`startPatternCycle`** deep-copies `BG.card` and `BG.matchedCells` into
+   `_celebCardSnapshot` and sets `_celebCardLocked = true` before starting the
+   interval. `showNext` renders from `_celebCardSnapshot` — never live `BG`.
+
+3. **`stopPatternCycle`** clears `_celebCardLocked` and `_celebCardSnapshot`.
+   Called at the top of `doBingoSpin()` — lock releases exactly on next Spin press.
+
+4. **`_onServerBallPos`** `renderBingoCard` gate extended:
+   `!S.spinning` → `!S.spinning && !_celebCardLocked`.
+   `BG.matchedCells` still gets daubed in the background — card stays silently
+   current for the next spin. Only the render call is suppressed.
+
+5. **`WABC.onNewCall`**, **`WABC.onRestoreWide`**, **`_requestNewWABCSequence`**,
+   and the **WABC init block** all have their `renderBingoCard` calls guarded with
+   `!_celebCardLocked`. Ball strip continues updating live in all cases.
+
+**Design preserved:**
+- Card frozen showing winning daubs + pattern highlights until next Spin press ✓
+- Ball strip keeps ticking live ✓
+- BG.matchedCells updated silently in background for next spin ✓
+- ES5 only — no arrow functions, const/let, or backticks ✓
+
+**Files changed:** `js/game.js`
+- Cache: `spbm-v6130`
+- index.html: title, splash-ver, all `?v=` → `v6.13`

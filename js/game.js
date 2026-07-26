@@ -192,42 +192,6 @@ var BG={
 };
 var COL_RANGES=[[1,15],[16,30],[31,45],[46,60],[61,75]];
 
-/* ── RED SPIN CARD LOCK ─────────────────────────────────────────────────────
-   When a multi-pattern bingo win triggers Red Spin, the winning card state
-   must remain frozen for the entire Red Spin sequence — exactly as on a
-   real VGT machine. A new WABC ball sequence arriving near ball 75 would
-   otherwise overwrite BG.card/BG.callSeq/BG.matchedCells mid-celebration,
-   causing Red Spin to render pattern highlights on the wrong card.
-
-   _rsCardLocked  : true while Red Spin (or progressive finale) is in flight.
-   _rsCardSnapshot: atomic copy of {card,callSeq,matchedCells,cardNumSet}
-                    taken at spin-result time (before the 600ms pre-RS delay).
-                    runRS and showProgJP use this, never live BG.*
-   _pendingNewSeq : new WABC sequence absorbed while locked; applied to BG
-                    at the moment the lock releases (end of Red Spin / onDone).
-   ─────────────────────────────────────────────────────────────────────────── */
-var _rsCardLocked   = false;
-var _rsCardSnapshot = null;
-var _pendingNewSeq  = null;
-
-/* ── WIN CELEBRATION CARD LOCK ──────────────────────────────────────────────
-   After any winning spin (Red Spin or plain win), startPatternCycle() freezes
-   the winning card display until the player presses Spin again.
-
-   _celebCardLocked  : true while the win celebration cycle is running.
-   _celebCardSnapshot: frozen copy of {card, matchedCells} taken at the moment
-                       startPatternCycle() is called. showNext() uses this
-                       snapshot — never live BG — so a new WABC sequence
-                       resetting BG.matchedCells cannot affect the display.
-
-   _onServerBallPos continues to daub BG.matchedCells in the background
-   (card stays silently current for next spin) but renderBingoCard is
-   suppressed while locked. Ball strip keeps updating live — unchanged.
-   Lock releases in stopPatternCycle(), which runs at top of doBingoSpin().
-   ─────────────────────────────────────────────────────────────────────────── */
-var _celebCardLocked   = false;
-var _celebCardSnapshot = null;
-
 function cardFingerprint(card){
   // Compact string of all 24 numbers in order (null=0)
   var parts=[];
@@ -529,23 +493,11 @@ function startPatternCycle(winPatterns){
     document.getElementById('bingo-pattern-name').textContent='\u00a0';
     return;
   }
-  /* v6.13: Freeze the winning card state NOW — before any new WABC sequence
-     can reset BG.matchedCells. showNext uses this snapshot for the entire
-     celebration, so new-sequence daub resets cannot affect the display.
-     BG.matchedCells still gets updated in the background by _onServerBallPos
-     (silently keeping the card current for the next spin press). */
-  var _snapCard = BG.card.slice();
-  var _snapMatched = {};
-  var _smk = Object.keys(BG.matchedCells);
-  for(var _smi=0;_smi<_smk.length;_smi++) _snapMatched[_smk[_smi]]=true;
-  _celebCardSnapshot = {card:_snapCard, matchedCells:_snapMatched};
-  _celebCardLocked = true;
-
   BG.cycleIdx=0;
   function showNext(){
     var pat=winPatterns[BG.cycleIdx%winPatterns.length];
     document.getElementById('bingo-pattern-name').textContent=pat.name.toUpperCase();
-    renderBingoCard(_celebCardSnapshot.card,_celebCardSnapshot.matchedCells,pat.cells);
+    renderBingoCard(BG.card,BG.matchedCells,pat.cells);
     BG.cycleIdx++;
   }
   showNext();
@@ -555,9 +507,6 @@ function startPatternCycle(winPatterns){
 function stopPatternCycle(){
   if(BG.patternCycle){clearInterval(BG.patternCycle);BG.patternCycle=null;}
   document.getElementById('bingo-pattern-name').textContent='\u00a0';
-  /* v6.13: release celebration card lock */
-  _celebCardLocked   = false;
-  _celebCardSnapshot = null;
 }
 
 
@@ -670,12 +619,12 @@ function _onServerBallPos(newPos){
       BG.matchedCells[BG.cardNumSet[_bball]]=true;
   }
 
-  /* Gate: never overwrite the card during Red Spin, any active spin, or win
-     celebration cycle. runRS sets pattern highlights on the card as each reel
-     stops; startPatternCycle holds the frozen win state until next Spin press.
-     A server ball-pos event must not wipe those highlights by re-rendering
-     with winPatternCells=null. Ball strip can still update live. */
-  if(GS.state==='active' && !S.spinning && !_celebCardLocked){
+  /* Gate: never overwrite the card during Red Spin or any active spin.
+     runRS sets pattern highlights on the card as each reel stops — a
+     server ball-pos event mid-Red Spin must not wipe those highlights
+     by re-rendering with winPatternCells=null. The ball strip can still
+     update (server position is authoritative for the strip display). */
+  if(GS.state==='active'&&!S.spinning){
     renderBingoCard(BG.card,BG.matchedCells,null);
   }
   renderBallStrip(BG.callSeq,BG.ballPos,BG.cardNumSet);
@@ -780,17 +729,6 @@ function _requestNewWABCSequence() {
       if(typeof WABC !== 'undefined' && WABC.applyLocalNewCall) {
         WABC.applyLocalNewCall(_newSeq, _newIAt);
       }
-      /* v6.4 RS CARD LOCK: if Red Spin is in progress, absorb the new
-         sequence silently — do NOT overwrite BG.card/callSeq/matchedCells.
-         _releaseRsCardLock() will apply it when the lock is released. */
-      if (_rsCardLocked) {
-        _pendingNewSeq = { seq: _newSeq, issuedAt: _newIAt };
-        BG.awaitingNewSeq   = false;
-        BG.seqExhausted     = false;
-        BG._coverAll75Fired = false;
-        updateBallCallBadge();
-        return;
-      }
       BG.callSeq = _newSeq;
       BG.ballPos = 40;
       BG.usingServerBalls = true;
@@ -804,7 +742,7 @@ function _requestNewWABCSequence() {
           if(BG.cardNumSet[_ncball]!==undefined)
             BG.matchedCells[BG.cardNumSet[_ncball]]=true;
         }
-        if(GS.state==='active' && !_celebCardLocked){
+        if(GS.state==='active'){
           renderBingoCard(BG.card,BG.matchedCells,null);
         }
         renderBallStrip(BG.callSeq,40,BG.cardNumSet);
@@ -829,13 +767,8 @@ function doBingoSpin(){
     if(!_wabcSeq || _wabcSeq.length !== 75) {
       /* Sequence not ready — DB may be restarting */
       toast('Ball call unavailable \u2014 please wait for connection');
-      S.spinning=false; S.bal+=S.cpl; setCtrl(true); updUI();
-      /* v6.1 FIX: return null (not []) so doSpin can distinguish "bail out"
-         from "no bingo win". Returning [] caused _continueSpinAfterClaim()
-         to always run after a bail, firing a phantom reel animation on a
-         cancelled/refunded spin — the root cause of the first-spin wrong
-         reel symbol display. */
-      return null;
+      S.spinning=false; S.bal+=S.cpl*(typeof PROG_DENOM!=='undefined'?PROG_DENOM:1); setCtrl(true); updUI();
+      return [];
     }
     BG.callSeq = _wabcSeq;
     if(BG.seqExhausted) {
@@ -846,9 +779,8 @@ function doBingoSpin(){
   } else {
     /* WABC unavailable — cannot proceed without a valid ball sequence */
     toast('Ball call unavailable \u2014 please wait for connection');
-    S.spinning=false; S.bal+=S.cpl; setCtrl(true); updUI();
-    /* v6.1 FIX: return null sentinel — see note above */
-    return null;
+    S.spinning=false; S.bal+=S.cpl*(typeof PROG_DENOM!=='undefined'?PROG_DENOM:1); setCtrl(true); updUI();
+    return [];
   }
 
   // Fresh card for this spin
@@ -883,7 +815,7 @@ function doBingoSpin(){
   }
   // ── END TRIGGER 2 guaranteed card ──────────────────────────────────────────
   _continueDoBingoSpin(prevBallPos);
-  return BG.winPatterns;
+  return BG.winPatterns; /* always return winPatterns synchronously */
 }
 
 function _continueDoBingoSpin(prevBallPos) {
@@ -1088,7 +1020,7 @@ function fmtMoney(n){
 function updUI(){
   document.getElementById('bval').textContent=fmt(S.bal);
   _savePlayerState();
-  document.getElementById('betval').textContent=fmt(S.cpl);
+  document.getElementById('betval').textContent=fmt(S.cpl*(typeof PROG_DENOM!=='undefined'?PROG_DENOM:1));
   document.getElementById('cdisp').textContent=S.cpl;
 }
 /* Refresh the spin watchdog — called at each stage of a long Red
@@ -1105,10 +1037,7 @@ function _refreshSpinWatchdog(){
   _spinWatchdog=setTimeout(function(){
     if(S.spinning){
       console.warn('[Watchdog] Spin stuck >15s — force unlocking');
-      _spinWatchdog=null;
-      /* v6.4: release card lock if watchdog fires during Red Spin */
-      _releaseRsCardLock();
-      S.spinning=false; setCtrl(true); updUI();
+      _spinWatchdog=null; S.spinning=false; setCtrl(true); updUI();
       var cel=document.getElementById('force-win-cel');
       if(cel) cel.classList.remove('show');
     }
@@ -1134,59 +1063,6 @@ function setCtrl(en){
   var ids=['spin-btn','cred-btn','max-btn','co-btn','ic-btn','lobby-btn'];
   for(var i=0;i<ids.length;i++) document.getElementById(ids[i]).disabled=!en;
 }
-/* ── RED SPIN CARD LOCK HELPERS ─────────────────────────────────────────────
-   _acquireRsCardLock()  — snapshot BG state, raise lock flag.
-                           Call once when winPatterns.length > 0 is confirmed,
-                           before the 600ms pre-RS setTimeout fires.
-   _releaseRsCardLock()  — lower lock flag, apply any pending new sequence,
-                           clear snapshot.
-                           Call at the end of every Red Spin / prog finale path
-                           (just before S.spinning=false / setCtrl(true)).
-   ─────────────────────────────────────────────────────────────────────────── */
-function _acquireRsCardLock() {
-  _rsCardLocked = true;
-  /* Deep-copy only the fields runRS needs; everything else can still live. */
-  var snapCard = BG.card.slice();
-  var snapCallSeq = BG.callSeq.slice();
-  var snapMatched = {};
-  var _mk = Object.keys(BG.matchedCells);
-  for (var _mi = 0; _mi < _mk.length; _mi++) snapMatched[_mk[_mi]] = true;
-  var snapNumSet = {};
-  var _nk = Object.keys(BG.cardNumSet);
-  for (var _ni = 0; _ni < _nk.length; _ni++) snapNumSet[_nk[_ni]] = BG.cardNumSet[_nk[_ni]];
-  _rsCardSnapshot = {
-    card:         snapCard,
-    callSeq:      snapCallSeq,
-    matchedCells: snapMatched,
-    cardNumSet:   snapNumSet
-  };
-}
-
-function _releaseRsCardLock() {
-  _rsCardLocked   = false;
-  _rsCardSnapshot = null;
-  /* Apply any new WABC sequence that arrived while locked */
-  if (_pendingNewSeq) {
-    var _pSeq = _pendingNewSeq.seq;
-    _pendingNewSeq = null;
-    BG.callSeq          = _pSeq;
-    BG.ballPos          = 40;
-    BG.usingServerBalls = true;
-    BG.seqExhausted     = false;
-    BG.awaitingNewSeq   = false;
-    BG._coverAll75Fired = false;
-    /* Re-daub current card against new sequence for next spin */
-    if (BG.card && Object.keys(BG.cardNumSet).length > 0) {
-      BG.matchedCells = {12: true};
-      for (var _ri = 0; _ri < 40; _ri++) {
-        var _rb = _pSeq[_ri];
-        if (BG.cardNumSet[_rb] !== undefined) BG.matchedCells[BG.cardNumSet[_rb]] = true;
-      }
-    }
-    updateBallCallBadge();
-  }
-}
-
 function toast(m){var el=document.getElementById('toast');el.textContent=m;el.classList.add('on');setTimeout(function(){el.classList.remove('on');},2600);}
 function setWin(a,lbl){
   var el=document.getElementById('wval');
@@ -1456,16 +1332,12 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
       console.log('[RedSpin] _onReelDone called, rsDone='+rsDone);
       if(rsDone<3) return; /* wait for all 3 reels to finish */
       /* Reveal pattern name + card highlight NOW — exactly as 3rd reel lands.
-         Player sees the result at the moment of stop, not before the spin.
-         v6.4: use _rsCardSnapshot (winning card state) not live BG.card —
-         BG may have been replaced by a new WABC sequence mid-Red-Spin. */
+         Player sees the result at the moment of stop, not before the spin. */
       if(_pnEl) _pnEl.textContent=pat.name.toUpperCase();
-      var _rsCard    = (_rsCardSnapshot ? _rsCardSnapshot.card         : BG.card);
-      var _rsMatched = (_rsCardSnapshot ? _rsCardSnapshot.matchedCells : BG.matchedCells);
-      renderBingoCard(_rsCard, _rsMatched, pat.cells);
+      renderBingoCard(BG.card,BG.matchedCells,pat.cells);
       console.log('[RedSpin] All 3 reels done, firing 120ms callback');
       setTimeout(function(){
-      var payAmt=pat.pay[cpl-1];
+      var payAmt=pat.pay[cpl-1]*(typeof PROG_DENOM!=='undefined'?PROG_DENOM:1);
       if(pat.isProgressive&&progCtx){
         /* Progressive Jackpot — grand finale. Reels already show 3× JP
            (Lazy-T reel stop). Add accumulated bonusTotal + jackpot amount,
@@ -1491,7 +1363,6 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
             console.error('[Progressive] showProgJP threw — recovering controls:', e);
             var _cel=document.getElementById('force-win-cel');
             if(_cel) _cel.classList.remove('show');
-            _releaseRsCardLock();
             S.spinning=false; setCtrl(true); updUI();
           }
         },500);
@@ -1526,7 +1397,6 @@ function runRS(rsPatterns,cpl,onDone,progCtx){
             console.error('[RedSpin] showJP threw — recovering controls:', e);
             var _jpov=document.getElementById('jp-ov');
             if(_jpov) _jpov.classList.remove('on');
-            _releaseRsCardLock();
             S.spinning=false; setCtrl(true); updUI();
           }
         },500);return;
@@ -1559,15 +1429,16 @@ function doSpin(){
   if(S.spinning) return;
   if(Date.now()-_spinDebounce<300) return;
   if(BG.awaitingNewSeq){toast('New ball sequence loading \u2014 please wait');return;}
-  if(S.bal<S.cpl){toast('INSERT CASH TO PLAY');return;}
+  var _betAmt=S.cpl*(typeof PROG_DENOM!=='undefined'?PROG_DENOM:1);
+  if(S.bal<_betAmt){toast('INSERT CASH TO PLAY');return;}
   if(_reelWinH===0) initReelSlots();
-  S.spinning=true;S.bal-=S.cpl;
+  S.spinning=true;S.bal-=_betAmt;
   if(typeof Progressive!=='undefined'){
     Progressive.registerPlayer(null, window._playerNickname || null);
     if(Progressive.updateLastSpin) Progressive.updateLastSpin();
-    if(Progressive.contribute) Progressive.contribute(S.cpl);
+    if(Progressive.contribute) Progressive.contribute(_betAmt);
   }
-  var _spinBalBefore=S.bal+S.cpl; var _spinCardSerial=BG.cardSerial;
+  var _spinBalBefore=S.bal+_betAmt; var _spinCardSerial=BG.cardSerial;
   setWin(0,'');document.getElementById('bt-box').classList.remove('on');
   updUI();setCtrl(false);
   stopPatternCycle();
@@ -1581,9 +1452,6 @@ function doSpin(){
 
   var winPatterns=doBingoSpin();
 
-  /* v6.1 FIX: doBingoSpin() returns null (not []) when WABC is unavailable.
-     In that case the bet has already been refunded and controls re-enabled
-     inside doBingoSpin — do not call _continueSpinAfterClaim at all. */
   /* v6.1 FIX: doBingoSpin() returns null when WABC is unavailable —
      bet already refunded inside doBingoSpin, do not continue. */
   if(winPatterns===null) return;
@@ -1635,7 +1503,7 @@ function doSpin(){
     animateReels(spinData,function(){
       if(winPatterns.length===0){
         setWin(0,'NO BINGO');
-        opLog({type:'SPIN',gameSerial:genGameSerial(),cardSerial:_spinCardSerial,bet:S.cpl,win:0,patterns:[],balBefore:_spinBalBefore,balAfter:S.bal});
+        opLog({type:'SPIN',gameSerial:genGameSerial(),cardSerial:_spinCardSerial,bet:_betAmt,win:0,patterns:[],balBefore:_spinBalBefore,balAfter:S.bal});
         _spinDebounce=Date.now();_clearSpinWatchdog();S.spinning=false;setCtrl(true);updUI();return;
       }
 
@@ -1703,10 +1571,6 @@ function doSpin(){
       if(baseAmt>=50) sndBigWin(); else sndSmallWin();
 
       if(rsPatterns.length>0){
-        /* v6.4: Snapshot winning card state NOW — before the 600ms delay —
-           so any new WABC sequence arriving in that window is absorbed by
-           _pendingNewSeq instead of overwriting BG.card/matchedCells. */
-        _acquireRsCardLock();
         startPatternCycle([basePat]);
         setTimeout(function(){
           stopPatternCycle();
@@ -1714,14 +1578,13 @@ function doSpin(){
             setWin(baseAmt+bonusTotal,'BINGO WIN + RED SPIN!');
             document.getElementById('bt-box').classList.remove('on');
             startPatternCycle(winPatterns);
-            opLog({type:'SPIN',gameSerial:genGameSerial(),cardSerial:_spinCardSerial,bet:S.cpl,win:baseAmt+bonusTotal,patterns:winPatterns.map(function(p){return p.name;}),balBefore:_spinBalBefore,balAfter:S.bal});
-            _releaseRsCardLock();
+            opLog({type:'SPIN',gameSerial:genGameSerial(),cardSerial:_spinCardSerial,bet:_betAmt,win:baseAmt+bonusTotal,patterns:winPatterns.map(function(p){return p.name;}),balBefore:_spinBalBefore,balAfter:S.bal});
             _spinDebounce=Date.now();updUI();_clearSpinWatchdog();S.spinning=false;setCtrl(true);
           });
         },600);return;
       }
       startPatternCycle(winPatterns);
-      opLog({type:'SPIN',gameSerial:genGameSerial(),cardSerial:_spinCardSerial,bet:S.cpl,win:baseAmt,patterns:winPatterns.map(function(p){return p.name;}),balBefore:_spinBalBefore,balAfter:S.bal});
+      opLog({type:'SPIN',gameSerial:genGameSerial(),cardSerial:_spinCardSerial,bet:_betAmt,win:baseAmt,patterns:winPatterns.map(function(p){return p.name;}),balBefore:_spinBalBefore,balAfter:S.bal});
       _spinDebounce=Date.now();_clearSpinWatchdog();S.spinning=false;setCtrl(true);updUI();
     });
   } // end _continueSpinAfterClaim
@@ -1785,8 +1648,6 @@ function _finishProgressiveSpin(progAmt, winPatterns, basePat, cardSerial, balBe
   var rsSeq=_progPat?[_progPat]:[basePat];
 
   startPatternCycle([basePat]);
-  /* v6.4: Snapshot winning card state NOW — same timing as normal Red Spin path */
-  _acquireRsCardLock();
   setTimeout(function(){
     stopPatternCycle();
     runRS(rsSeq,S.cpl,function(){ /* unused — Progressive entry ends the sequence */ },
@@ -1843,10 +1704,7 @@ function showProgJP(progAmt, winPatterns, cardSerial, balBefore) {
       }
     }
     var _allCellArr = Object.keys(_allWinCells).map(Number);
-    /* v6.4: use snapshot card if still locked, else live BG */
-    var _pgCard    = (_rsCardSnapshot ? _rsCardSnapshot.card         : BG.card);
-    var _pgMatched = (_rsCardSnapshot ? _rsCardSnapshot.matchedCells : BG.matchedCells);
-    renderBingoCard(_pgCard, _pgMatched, _allCellArr);
+    renderBingoCard(BG.card, BG.matchedCells, _allCellArr);
     startPatternCycle(winPatterns);
 
     opLog({type:'SPIN', gameSerial:genGameSerial(), cardSerial:cardSerial,
@@ -1866,8 +1724,6 @@ function showProgJP(progAmt, winPatterns, cardSerial, balBefore) {
 
     _spinDebounce = Date.now();
     (function(){if(_spinWatchdog){clearTimeout(_spinWatchdog);_spinWatchdog=null;}})();
-    /* v6.4: release card lock — applies any pending new WABC sequence */
-    _releaseRsCardLock();
     S.spinning = false; setCtrl(true); updUI();
   }
   if (dismissBtn) {
@@ -1948,8 +1804,8 @@ function initProgressiveMeter(){
               if(BG.cardNumSet[_iball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_iball]]=true;
             }
-            /* Don't overwrite showcase pattern during idle or win celebration */
-            if(GS.state==='active' && !_celebCardLocked){
+            /* Don't overwrite showcase pattern during idle */
+            if(GS.state==='active'){
               renderBingoCard(BG.card,BG.matchedCells,null);
             }
           }
@@ -1973,6 +1829,7 @@ function initProgressiveMeter(){
 
         /* ── WABC event hooks ── registered once here, never re-registered */
 
+        /* Operator issued Reset — new sequence, all players fast-forward to 40 */
         /* Operator issued Reset or Cover All — new sequence, all players fast-forward to 40.
            v6.2: Red Spin guard — if S.spinning is true (Red Spin in progress), absorb the
            new sequence and reset flags but do NOT touch BG.matchedCells or render anything.
@@ -1981,18 +1838,6 @@ function initProgressiveMeter(){
            actively viewing. Win highlights remain visible until the next Spin press (Q3). */
         WABC.onNewCall(function(newSeq) {
           if(!newSeq||newSeq.length!==75) return;
-          /* v6.4 RS CARD LOCK: if Red Spin is in progress, absorb silently.
-             Update WABC internal state flags but do NOT touch BG.card,
-             BG.matchedCells, or render anything.
-             _releaseRsCardLock() applies the pending seq when lock releases. */
-          if (_rsCardLocked) {
-            _pendingNewSeq = { seq: newSeq, issuedAt: null };
-            BG.awaitingNewSeq   = false;
-            BG.seqExhausted     = false;
-            BG._coverAll75Fired = false;
-            updateBallCallBadge();
-            return;
-          }
           BG.callSeq = newSeq;
           BG.ballPos = 40;
           BG.usingServerBalls = true;
@@ -2013,10 +1858,7 @@ function initProgressiveMeter(){
               if(BG.cardNumSet[_ncball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_ncball]]=true;
             }
-            /* v6.13: suppress card render during win celebration — snapshot holds display */
-            if(!_celebCardLocked){
-              renderBingoCard(BG.card,BG.matchedCells,null);
-            }
+            renderBingoCard(BG.card,BG.matchedCells,null);
             renderBallStrip(BG.callSeq,40,BG.cardNumSet);
           } else if(GS.state!=='active') {
             clearBallStrip();
@@ -2037,8 +1879,8 @@ function initProgressiveMeter(){
               if(BG.cardNumSet[_rwball]!==undefined)
                 BG.matchedCells[BG.cardNumSet[_rwball]]=true;
             }
-            /* Do not re-render card during spin/Red Spin/win celebration — pattern highlights locked. */
-            if(GS.state==='active' && !S.spinning && !_celebCardLocked){
+            /* Do not re-render card during spin/Red Spin — pattern highlights locked. */
+            if(GS.state==='active'&&!S.spinning){
               renderBingoCard(BG.card,BG.matchedCells,null);
             }
             renderBallStrip(BG.callSeq,40,BG.cardNumSet);
@@ -2114,33 +1956,29 @@ document.addEventListener('keydown',function(e){if(e.code==='Space'||e.code==='E
 document.getElementById('cred-btn').addEventListener('click',function(){if(S.spinning)return;var i=CPL.indexOf(S.cpl);S.cpl=CPL[(i+1)%CPL.length];updUI();});
 document.getElementById('max-btn').addEventListener('click',function(){if(S.spinning)return;S.cpl=3;updUI();setTimeout(doSpin,80);});
 document.getElementById('lobby-btn').addEventListener('click',function(){
-  window.location.href='https://theturrellesisters.github.io/turrelle_gold_coins_casino/';
+  /* v6.06: navigate back to Gold Coins Casino lobby */
+  var _lobbyUrl='https://theturrellesisters.github.io/turrelle_gold_coins_casino/';
+  try{
+    var _ref=document.referrer;
+    if(_ref&&_ref.indexOf('theturrellesisters.github.io')!==-1)_lobbyUrl=_ref;
+  }catch(e){}
+  window.location.href=_lobbyUrl;
 });
-document.getElementById('help-close').addEventListener('click',function(){document.getElementById('help').classList.remove('on');});
   document.getElementById('co-btn').addEventListener('click',function(){
   if(S.spinning)return;
   if(S.bal<=0){toast('NOTHING TO CASH OUT');return;}
   var _coAmt=S.bal;
-  /* v6.3: save to virtual wallet as voucher, then zero balance */
+  /* v6.05: save to virtual wallet as voucher, then zero balance */
   WalletUI.cashOut(function(ok){
     S.bal=0;
     opLog({type:'CASH_OUT',amount:_coAmt,balBefore:_coAmt,balAfter:0,walletSaved:ok});
     updUI();
-    toast('CASHED OUT '+fmt(_coAmt)+(ok?' • SAVED TO WALLET':''));
-    /* Return to lobby after brief delay */
-    setTimeout(function(){
-      var _lobbyUrl='https://theturrellesisters.github.io/turrelle_gold_coins_casino/';
-      try{
-        var _ref=document.referrer;
-        if(_ref&&_ref.indexOf('theturrellesisters.github.io')!==-1)_lobbyUrl=_ref;
-      }catch(e){}
-      window.location.href=_lobbyUrl;
-    },2200);
+    toast('CASHED OUT '+fmt(_coAmt)+(ok?' • SAVED TO WALLET':' • OFFLINE'));
   });
 });
 document.getElementById('ic-btn').addEventListener('click',function(){
   if(S.spinning)return;
-  /* v6.3: open virtual wallet overlay instead of local insert */
+  /* v6.05: open virtual wallet overlay instead of local insert */
   WalletUI.open();
 });
 document.getElementById('ic-ok').addEventListener('click',function(){var v=parseFloat(document.getElementById('ic-inp').value);if(v>0&&v<=9999){var _ciBal=S.bal;S.bal+=v;opLog({type:'CASH_IN',amount:v,balBefore:_ciBal,balAfter:S.bal});updUI();toast(fmt(v)+' ADDED');sndCreditsAddUp();}document.getElementById('ic-ov').classList.remove('on');});

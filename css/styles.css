@@ -380,7 +380,7 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;
 #prog-meter-lbl.local-mode{color:#ffaa00;}
 #prog-meter-val.local-mode{color:#ffaa00;opacity:.85;}
 
-/* ── WALLET OVERLAY (v6.3) ── */
+/* ── WALLET OVERLAY (v6.05) ── */
 #wallet-ov{
   display:none;position:fixed;inset:0;z-index:180;
   background:rgba(0,0,0,.7);
@@ -489,6 +489,9 @@ html,body{width:100%;height:100%;background:#000;overflow:hidden;
   margin-top:1px;
 }
 
-/* ── LOBBY BUTTON ── */
-#lobby-btn{background:linear-gradient(135deg,#1a0010,#3a0025);color:#ff88cc;border-color:#880044;}
+/* ── LOBBY BUTTON (replaces PAYS/help-btn) ── */
+#lobby-btn{
+  background:linear-gradient(135deg,#1a0010,#3a0025);
+  color:#ff88cc;border-color:#880044;
+}
 #lobby-btn:active{-webkit-transform:scale(.96);transform:scale(.96);}
